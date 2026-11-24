@@ -16,7 +16,10 @@ main{max-width:760px;margin:auto;padding:14px;display:grid;gap:12px}
 button{border:0;border-radius:10px;padding:12px 15px;font-size:15px;font-weight:650;background:#176b50;color:white}
 button.secondary{background:#e8efeb;color:#163b2e}button:disabled{opacity:.45}
 .hidden{display:none!important}
-video{width:100%;max-height:48vh;object-fit:cover;background:#18231f;border-radius:10px}
+.camwrap{position:relative;border-radius:10px;overflow:hidden;background:#18231f}
+.camwrap video{width:100%;height:58vh;object-fit:cover;display:block}
+.guide{position:absolute;left:4%;right:4%;top:32%;height:34%;border:3px solid #ffd54a;border-radius:8px;box-shadow:0 0 0 999px rgba(0,0,0,.4);pointer-events:none}
+.guideTxt{position:absolute;left:0;right:0;top:calc(32% - 26px);text-align:center;color:#fff;font-size:12px;font-weight:700;pointer-events:none}
 .preview img{width:100%;border-radius:10px;border:1px solid #dce5df;display:block}
 label{display:block;font-size:12px;font-weight:700;color:#53645b;margin:10px 0 4px}
 input,textarea{width:100%;padding:11px;border:1px solid #cbd8d0;border-radius:9px;font:inherit;background:#fff}
@@ -26,7 +29,6 @@ textarea{min-height:85px;font-size:12px}.grid{display:grid;grid-template-columns
 small{color:#64756c}.meter{font-variant-numeric:tabular-nums;font-weight:700}
 #message{min-height:20px;font-size:13px;color:#176b50;margin-top:8px}
 #warn{min-height:18px;font-size:13px;font-weight:650;color:#9b4c13;margin-top:6px}
-#recent div{font-size:13px}
 footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 @media(max-width:440px){.grid{grid-template-columns:1fr 1fr}button{flex:1}}
 </style>
@@ -37,10 +39,14 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 
 <section class="card">
  <div class="row spread"><strong>1. Capture one label</strong><span class="pill" id="ocrState">OCR not started</span></div>
- <video id="video" class="hidden" playsinline muted></video>
+ <div id="camwrap" class="camwrap hidden">
+  <video id="video" playsinline muted></video>
+  <div class="guideTxt">Fit Batch / Mfg / MRP block inside the box</div>
+  <div id="guide" class="guide"></div>
+ </div>
  <div id="previewBox" class="preview hidden">
-  <img id="preview" alt="Captured label">
-  <small>Captured image. Compare the fields below against this photo.</small>
+  <img id="preview" alt="Captured label area">
+  <small>This is the area that was read. Compare the fields below against it.</small>
  </div>
  <canvas id="canvas" hidden></canvas>
  <div class="row" style="margin-top:10px">
@@ -48,7 +54,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   <button id="captureBtn" disabled>Capture</button>
   <button id="cancelBtn" class="secondary" disabled>Cancel</button>
  </div>
- <p class="status" id="cameraStatus">Use HTTPS (or localhost) and allow camera access.</p>
+ <p class="status" id="cameraStatus">Use HTTPS (or localhost) and allow camera access. Hold the phone straight on to the label, 15–20 cm away, no glare.</p>
  <div class="row spread"><span class="status">OCR engine</span><span class="status meter" id="ocrProgress">Not loaded</span></div>
 </section>
 
@@ -61,10 +67,10 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  <label for="sku">SKU / Product (optional)</label>
  <input id="sku" placeholder="Enter SKU or product" disabled>
  <div class="grid">
-  <div><label for="batch">Batch / Lot No.</label><input id="batch" placeholder="Batch number" disabled></div>
-  <div><label for="mfg">MFG date</label><input id="mfg" placeholder="DD/MM/YYYY or MM/YYYY" disabled></div>
+  <div><label for="batch">Batch / Lot No.</label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
+  <div><label for="mfg">MFG date</label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
   <div><label for="bbMonths">Best before (months)</label><input id="bbMonths" type="number" min="1" max="240" placeholder="e.g. 24" disabled></div>
-  <div><label for="expiry">Expiry date (if printed)</label><input id="expiry" placeholder="DD/MM/YYYY or MM/YYYY" disabled></div>
+  <div><label for="expiry">Expiry date (if printed)</label><input id="expiry" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
  </div>
  <label for="rawText">Recognized raw text (correct if needed)</label>
  <textarea id="rawText" disabled></textarea>
@@ -91,7 +97,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  <div class="row spread"><strong>4. Recent records</strong><button id="exportBtn" class="secondary">Export CSV</button></div>
  <div id="recent" class="status">No records saved yet.</div>
 </section>
-<footer>Prototype v0.2 · One capture at a time · Verify every field before saving</footer>
+<footer>Prototype v0.3 · Guide-box capture · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -100,7 +106,6 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  const $ = id => document.getElementById(id);
  const DB_KEY='wbs_records_v1', URL_KEY='wbs_endpoint_v1', MIN_CONF=70;
  const FIELDS=['sku','batch','mfg','bbMonths','expiry','rawText'];
- const DATE='(\\d{1,2}[\\/.-]\\d{1,2}[\\/.-]\\d{2,4}|\\d{1,2}[\\/.-]\\d{4})';
  let worker=null, stream=null, state='idle', current=null, sessionSaved=0;
 
  const getRecords=()=>{try{return JSON.parse(localStorage.getItem(DB_KEY)||'[]')}catch{return []}};
@@ -113,7 +118,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  function setState(s){
   state=s;
   const idle=s==='idle', live=s==='live', cap=s==='captured';
-  $('video').classList.toggle('hidden',!live);
+  $('camwrap').classList.toggle('hidden',!live);
   $('previewBox').classList.toggle('hidden',!cap);
   $('startBtn').disabled=!idle;
   $('captureBtn').disabled=!live;
@@ -150,110 +155,181 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   if(!r.length){$('recent').textContent='No records saved yet.';return}
   r.slice(-5).reverse().forEach(x=>{
    const d=document.createElement('div');
-   d.style.cssText='padding:7px 0;border-bottom:1px solid #edf1ee';
+   d.style.cssText='padding:7px 0;border-bottom:1px solid #edf1ee;font-size:13px';
    d.textContent=`${x.batch||'(no batch)'} · MFG ${x.mfg||'?'} · BB ${x.bestBeforeMonths||'?'} mo · ${x.uploaded?'Uploaded':'Pending'}`;
    $('recent').appendChild(d);
   });
  }
 
- function parseDate(s){
-  if(!s)return '';
-  const t=s.trim().replace(/[.\-]/g,'/').replace(/\s+/g,'');
-  let m=t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if(m){
-   let a=+m[1],b=+m[2],y=+m[3];if(y<100)y+=y<50?2000:1900;
-   let day,month;
-   if(a>12){day=a;month=b}else if(b>12){month=a;day=b}else{day=a;month=b} // ambiguous: assumes DD/MM
-   if(month>=1&&month<=12&&day>=1&&day<=31)
-    return `${y}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+ /* ---------- Date parsing ---------- */
+ const pad=n=>String(n).padStart(2,'0');
+ function validYear(s){
+  const y=+s;
+  if(s.length===2)return (y>=18&&y<=50)?2000+y:0;
+  if(s.length===4)return (y>=2018&&y<=2050)?y:0;
+  return 0;
+ }
+ // Returns [{idx, out}] for every plausible date. Month-only dates -> MM/YYYY.
+ function findDates(text){
+  const out=[];
+  const re=/(?<!\d)(\d{1,2})\s*([\/.\-])\s*(\d{1,2})\s*\2\s*(\d{2,4})(?!\d)|(?<![\d.])(\d{1,2})\s*([\/.\-])\s*(\d{2,4})(?!\d)/g;
+  let m;
+  while((m=re.exec(text))){
+   if(m[1]!==undefined){
+    let a=+m[1],b=+m[3],y=validYear(m[4]);
+    if(!y)continue;
+    let day,month;
+    if(a>12){day=a;month=b}else if(b>12){month=a;day=b}else{day=a;month=b} // ambiguous -> DD/MM
+    if(month<1||month>12||day<1||day>31)continue;
+    out.push({idx:m.index,out:`${y}-${pad(month)}-${pad(day)}`});
+   }else{
+    const month=+m[5],y=validYear(m[7]);
+    if(!y||month<1||month>12)continue;
+    out.push({idx:m.index,out:`${pad(month)}/${y}`});
+   }
   }
-  m=t.match(/^(\d{1,2})\/(\d{4})$/);
-  if(m&&+m[1]>=1&&+m[1]<=12)return `${m[2]}-${String(+m[1]).padStart(2,'0')}-01`;
-  return '';
+  return out;
  }
 
+ /* ---------- Field extraction ---------- */
  function extract(text){
-  const lines=text.split(/\n/).map(x=>x.trim()).filter(Boolean);
-  const joined=lines.join('\n');
+  const t=(text||'').replace(/\r/g,'');
+  const U=t.toUpperCase();
+  const dates=findDates(t);
   let mfg='',expiry='',months='',batch='';
-  for(const l of lines){
-   const u=l.toUpperCase();
-   if(/\b(MFG|MFD|MANUFACT(?:URE|URING)?|M\.F\.G)\b/.test(u)){
-    const m=l.match(new RegExp(DATE));if(m)mfg=m[1];
-   }
-   if(/\b(EXP|EXPIRY|USE BY|USE BEFORE)\b/.test(u)){
-    const m=l.match(new RegExp(DATE));if(m)expiry=m[1];
-   }
-   if(/\b(BEST\s*BEFORE|B\.?B\.?)\b/.test(u)){
-    const m=l.match(/(\d{1,3})\s*(MONTHS?|MOS?|YRS?|YEARS?)/i);
-    if(m)months=String(+m[1]*(/YR|YEAR/i.test(m[2])?12:1));
-    const dm=l.match(new RegExp(DATE));if(dm&&!expiry)expiry=dm[1];
-   }
-   if(/\b(BATCH|LOT)\b/.test(u)){
-    let b=l.replace(/.*?\b(?:BATCH|LOT)(?:\s*(?:NO\.?|NUMBER|CODE))?\s*[:#\-]?\s*/i,'').trim();
-    b=b.replace(/\s+(MFG|MFD|EXP|BEST).*/i,'').trim();
-    if(b&&b.length<=40)batch=b;
+
+  // MFG: first date after an MFG/MFD label, else first date anywhere
+  const ml=U.search(/\b(MFG|MFD|MANUF\w*|M\.F\.G)\b/);
+  if(ml>=0){const d=dates.find(x=>x.idx>ml);if(d)mfg=d.out}
+  if(!mfg&&dates.length)mfg=dates[0].out;
+
+  // Expiry: only if an EXP / USE BY label is followed by a date
+  const el=U.search(/\b(EXP|EXPIRY|EXPIRES|USE\s*BY)\b/);
+  if(el>=0){const d=dates.find(x=>x.idx>el&&x.out!==mfg);if(d)expiry=d.out}
+
+  // Shelf life: "Use Before 24 Months", "Best Before 24 months", or any "N months"
+  let m=t.match(/(?:USE|BEST)\s*BEFORE\D{0,12}?(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)/i)
+     ||t.match(/(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)\b/i);
+  if(m)months=String(+m[1]*(/Y/i.test(m[2])?12:1));
+
+  // Batch: value after the label (same line or following), must contain a digit
+  const bad=/^(MFG|MFD|MFG\.|DATE|MRP|EXP|BEST|USE|NO|NET)$/i;
+  m=t.match(/\b(?:BATCH|LOT)\s*(?:NO\.?|NUMBER|CODE)?\s*[:#.\-]*\s*([A-Z0-9][A-Z0-9\/_-]{3,})/i);
+  if(m&&/\d/.test(m[1])&&!bad.test(m[1]))batch=m[1];
+  if(!batch){
+   // Fallback for column layouts: first token mixing letters and digits, 5-14 chars
+   const re=/\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,14}\b/g;
+   let c;
+   while((c=re.exec(U))){
+    if(/^\d/.test(c[0])&&/^\d+[A-Z]{0,2}$/.test(c[0]))continue;
+    batch=c[0];break;
    }
   }
-  if(!months){
-   const m=joined.match(/(?:BEST\s*BEFORE|B\.?B\.?)\D{0,12}(\d{1,3})\s*(MONTHS?|MOS?|YRS?|YEARS?)/i);
-   if(m)months=String(+m[1]*(/YR|YEAR/i.test(m[2])?12:1));
-  }
-  if(!mfg){const m=joined.match(new RegExp('(?:MFG|MFD|MANUFACT(?:URE|URING)?)\\D{0,15}'+DATE,'i'));if(m)mfg=m[1]}
-  if(!expiry){const m=joined.match(new RegExp('(?:EXP|EXPIRY|USE BY)\\D{0,15}'+DATE,'i'));if(m)expiry=m[1]}
-  if(!batch){const m=joined.match(/\b(?:BATCH|LOT)(?:\s*(?:NO\.?|NUMBER|CODE))?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9\/_-]{2,})/i);if(m)batch=m[1]}
-  return {batch,mfg:parseDate(mfg)||mfg,bestBeforeMonths:months,expiry:parseDate(expiry)||expiry};
+  return {batch:batch.toUpperCase(),mfg,bestBeforeMonths:months,expiry};
  }
 
- // Grayscale + contrast stretch to make print edges clearer for OCR.
- function enhance(c){
+ /* ---------- Image preparation ---------- */
+ function copyCanvas(src){
+  const c=document.createElement('canvas');c.width=src.width;c.height=src.height;
+  c.getContext('2d').drawImage(src,0,0);return c;
+ }
+ function grayStretch(c){
   const ctx=c.getContext('2d',{willReadFrequently:true});
-  const img=ctx.getImageData(0,0,c.width,c.height), d=img.data;
+  const img=ctx.getImageData(0,0,c.width,c.height),d=img.data;
   let min=255,max=0;
   for(let i=0;i<d.length;i+=4){
    const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-   d[i]=d[i+1]=d[i+2]=g;
-   if(g<min)min=g; if(g>max)max=g;
+   d[i]=d[i+1]=d[i+2]=g;if(g<min)min=g;if(g>max)max=g;
   }
   const range=Math.max(1,max-min);
-  for(let i=0;i<d.length;i+=4){
-   const v=Math.round((d[i]-min)*255/range);
-   d[i]=d[i+1]=d[i+2]=v;
+  for(let i=0;i<d.length;i+=4){const v=Math.round((d[i]-min)*255/range);d[i]=d[i+1]=d[i+2]=v}
+  ctx.putImageData(img,0,0);
+ }
+ function otsu(c){
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  const img=ctx.getImageData(0,0,c.width,c.height),d=img.data;
+  const h=new Array(256).fill(0);let total=0;
+  for(let i=0;i<d.length;i+=4){h[d[i]|0]++;total++}
+  let sum=0;for(let i=0;i<256;i++)sum+=i*h[i];
+  let sB=0,wB=0,best=0,th=128;
+  for(let i=0;i<256;i++){
+   wB+=h[i];if(!wB)continue;
+   const wF=total-wB;if(!wF)break;
+   sB+=i*h[i];
+   const mB=sB/wB,mF=(sum-sB)/wF,v=wB*wF*(mB-mF)*(mB-mF);
+   if(v>best){best=v;th=i}
   }
+  for(let i=0;i<d.length;i+=4){const v=d[i]>th?255:0;d[i]=d[i+1]=d[i+2]=v}
   ctx.putImageData(img,0,0);
  }
 
+ // Crop the yellow guide box out of the live video and enlarge it.
+ function cropGuide(){
+  const v=$('video'),vb=v.getBoundingClientRect(),gb=$('guide').getBoundingClientRect();
+  const vw=v.videoWidth,vh=v.videoHeight;
+  const s=Math.max(vb.width/vw,vb.height/vh);              // object-fit: cover
+  const ox=(vw*s-vb.width)/2,oy=(vh*s-vb.height)/2;
+  let sx=(gb.left-vb.left+ox)/s,sy=(gb.top-vb.top+oy)/s,sw=gb.width/s,sh=gb.height/s;
+  sx=Math.max(0,sx);sy=Math.max(0,sy);
+  sw=Math.min(sw,vw-sx);sh=Math.min(sh,vh-sy);
+  const k=Math.max(1,Math.min(3,1600/sw));
+  const c=$('canvas');
+  c.width=Math.round(sw*k);c.height=Math.round(sh*k);
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
+ }
+
+ /* ---------- OCR ---------- */
  async function initOCR(){
   if(worker)return;
   $('ocrState').textContent='Loading OCR…';
   worker=await Tesseract.createWorker('eng',1,{logger:m=>{
    if(m.status)$('ocrProgress').textContent=m.status+(m.progress?' '+Math.round(m.progress*100)+'%':'');
   }});
-  await worker.setParameters({tessedit_pageseg_mode:Tesseract.PSM.AUTO,preserve_interword_spaces:'1'});
   $('ocrState').textContent='OCR ready';
  }
+ async function ocrPass(canvas,psm){
+  await worker.setParameters({tessedit_pageseg_mode:psm,preserve_interword_spaces:'1'});
+  const r=await worker.recognize(canvas);
+  return {text:(r.data.text||'').trim(),conf:Math.round(r.data.confidence||0)};
+ }
 
- async function runOCR(c){
+ async function runOCR(cropped){
   $('cameraStatus').textContent='Reading label…';
   try{
-   enhance(c);
-   const result=await worker.recognize(c);
-   const text=(result.data.text||'').trim();
-   const conf=Math.round(result.data.confidence||0);
+   // Pass 1: grayscale + contrast, block layout
+   const g=copyCanvas(cropped);grayStretch(g);
+   const r1=await ocrPass(g,Tesseract.PSM.SINGLE_BLOCK);
+   let x=extract(r1.text),text=r1.text,conf=r1.conf;
+
+   // Pass 2 (only if needed): black/white, sparse text
+   if(!x.batch||!x.mfg){
+    $('cameraStatus').textContent='Trying a second read…';
+    const b=copyCanvas(g);otsu(b);
+    const r2=await ocrPass(b,Tesseract.PSM.SPARSE_TEXT);
+    const x2=extract(r2.text);
+    x={batch:x.batch||x2.batch,mfg:x.mfg||x2.mfg,
+       bestBeforeMonths:x.bestBeforeMonths||x2.bestBeforeMonths,expiry:x.expiry||x2.expiry};
+    text=r1.text+'\n--- second read ---\n'+r2.text;
+    conf=Math.max(conf,r2.conf);
+   }
+
    current={rawText:text,confidence:conf};
-   const x=extract(text);
    $('batch').value=x.batch||'';
    $('mfg').value=x.mfg||'';
    $('bbMonths').value=x.bestBeforeMonths||'';
    $('expiry').value=x.expiry||'';
    $('rawText').value=text;
    $('ocrConf').textContent=`OCR confidence ${conf}%`;
-   if(!text)setWarn('No text found. Retake with the label in focus and well lit.');
-   else if(conf<MIN_CONF)setWarn('Low OCR confidence. Check carefully against the photo, or Retake.');
-   else if(!x.batch||!x.mfg)setWarn('Batch or MFG date not detected. Enter it from the photo.');
-   else setWarn('');
+   if(!text)setWarn('No text found. Retake with the label block inside the yellow box, in focus.');
+   else if(!x.batch||!x.mfg)setWarn('Batch or MFG date not detected. Enter it from the photo, or Retake.');
+   else if(conf<MIN_CONF)setWarn('Low OCR confidence. Check carefully against the photo.');
+   else setWarn('Check batch letters vs digits (O/0, I/1, S/5, B/8) against the photo.');
    $('cameraStatus').textContent='Review the fields, then Save or Retake.';
   }catch(e){
+   current={rawText:'',confidence:0};
    setWarn('OCR error: '+e.message+'. Enter fields manually or Retake.');
   }finally{
    $('saveBtn').disabled=!current;
@@ -261,6 +337,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   }
  }
 
+ /* ---------- Camera flow ---------- */
  async function startCamera(){
   setMessage('');
   try{
@@ -270,13 +347,13 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
     audio:false,
     video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}
    });
+   try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch{}
    $('video').srcObject=stream;
    await $('video').play();
    setState('live');
-   $('cameraStatus').textContent='Frame one label, hold the phone still, then tap Capture.';
+   $('cameraStatus').textContent='Fit the Batch / Mfg / MRP block inside the yellow box, hold still, tap Capture.';
   }catch(e){
-   stopStream();
-   setState('idle');
+   stopStream();setState('idle');
    $('cameraStatus').textContent='Cannot start camera: '+e.message;
   }
  }
@@ -286,11 +363,9 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  $('captureBtn').onclick=async()=>{
   const v=$('video');
   if(state!=='live'||v.readyState<2)return;
-  const c=$('canvas');
-  c.width=v.videoWidth;c.height=v.videoHeight;
-  c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,c.width,c.height);
+  const c=cropGuide();
   $('preview').src=c.toDataURL('image/jpeg',0.92);
-  stopStream();               // camera off: the captured frame is frozen for review
+  stopStream();                 // camera off: captured area is frozen for review
   setState('captured');
   $('saveBtn').disabled=true;
   $('retakeBtn').disabled=true;
@@ -315,8 +390,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
    scanId:crypto.randomUUID?crypto.randomUUID():String(now.getTime())+'-'+Math.random().toString(16).slice(2),
    scanDateTime:now.toISOString(),
    deviceId:'android-chrome',
-   sku:val('sku'),
-   batch,mfg,
+   sku:val('sku'),batch,mfg,
    bestBeforeMonths:val('bbMonths'),
    expiry:val('expiry'),
    ocrConfidence:conf,
@@ -326,13 +400,12 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   });
   setRecords(r);
   sessionSaved++;
-  resetCapture();
-  setState('idle');
-  updateCounts();
+  resetCapture();setState('idle');updateCounts();
   setMessage('Saved. Tap Start camera for the next label.');
   $('cameraStatus').textContent='Ready for the next label.';
  };
 
+ /* ---------- Sync / export ---------- */
  $('saveUrlBtn').onclick=()=>{
   const u=val('endpoint');
   if(!u.startsWith('https://script.google.com/')){setMessage('Enter a valid Apps Script /exec URL.',true);return}
