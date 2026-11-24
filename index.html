@@ -97,7 +97,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  <div class="row spread"><strong>4. Recent records</strong><button id="exportBtn" class="secondary">Export CSV</button></div>
  <div id="recent" class="status">No records saved yet.</div>
 </section>
-<footer>Prototype v0.3 · Guide-box capture · Verify every field before saving</footer>
+<footer>Prototype v0.3.1 · Guide-box + dot-matrix read · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -172,7 +172,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  // Returns [{idx, out}] for every plausible date. Month-only dates -> MM/YYYY.
  function findDates(text){
   const out=[];
-  const re=/(?<!\d)(\d{1,2})\s*([\/.\-])\s*(\d{1,2})\s*\2\s*(\d{2,4})(?!\d)|(?<![\d.])(\d{1,2})\s*([\/.\-])\s*(\d{2,4})(?!\d)/g;
+  const re=/(?<!\d)(\d{1,2})\s*([\/.\-,])\s*(\d{1,2})\s*\2\s*(\d{2,4})(?!\d)|(?<![\d.])(\d{1,2})\s*([\/.\-,])\s*(\d{2,4})(?!\d)/g;
   let m;
   while((m=re.exec(text))){
    if(m[1]!==undefined){
@@ -281,6 +281,18 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   return c;
  }
 
+ // Dot-matrix helper: shrink + blur so separate dots merge into solid strokes.
+ function dotPrep(src){
+  const c=document.createElement('canvas');
+  c.width=Math.round(src.width*0.5);c.height=Math.round(src.height*0.5);
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.filter='blur(0.8px)';
+  ctx.drawImage(src,0,0,c.width,c.height);
+  ctx.filter='none';
+  grayStretch(c);otsu(c);
+  return c;
+ }
+
  /* ---------- OCR ---------- */
  async function initOCR(){
   if(worker)return;
@@ -290,8 +302,8 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   }});
   $('ocrState').textContent='OCR ready';
  }
- async function ocrPass(canvas,psm){
-  await worker.setParameters({tessedit_pageseg_mode:psm,preserve_interword_spaces:'1'});
+ async function ocrPass(canvas,psm,whitelist=''){
+  await worker.setParameters({tessedit_pageseg_mode:psm,preserve_interword_spaces:'1',tessedit_char_whitelist:whitelist});
   const r=await worker.recognize(canvas);
   return {text:(r.data.text||'').trim(),conf:Math.round(r.data.confidence||0)};
  }
@@ -314,6 +326,18 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
        bestBeforeMonths:x.bestBeforeMonths||x2.bestBeforeMonths,expiry:x.expiry||x2.expiry};
     text=r1.text+'\n--- second read ---\n'+r2.text;
     conf=Math.max(conf,r2.conf);
+   }
+
+   // Pass 3 (only if still missing): dot-matrix mode, letters/digits only
+   if(!x.batch||!x.mfg){
+    $('cameraStatus').textContent='Trying dot-matrix read…';
+    const d=dotPrep(g);
+    const r3=await ocrPass(d,Tesseract.PSM.SPARSE_TEXT,'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/.,:- ');
+    const x3=extract(r3.text);
+    x={batch:x.batch||x3.batch,mfg:x.mfg||x3.mfg,
+       bestBeforeMonths:x.bestBeforeMonths||x3.bestBeforeMonths,expiry:x.expiry||x3.expiry};
+    text+='\n--- dot-matrix read ---\n'+r3.text;
+    conf=Math.max(conf,r3.conf);
    }
 
    current={rawText:text,confidence:conf};
