@@ -22,14 +22,22 @@ button.secondary{background:#e8efeb;color:#163b2e}button:disabled{opacity:.45}
 .guideTxt{position:absolute;left:0;right:0;top:calc(32% - 26px);text-align:center;color:#fff;font-size:12px;font-weight:700;pointer-events:none}
 .preview img{width:100%;border-radius:10px;border:1px solid #dce5df;display:block}
 label{display:block;font-size:12px;font-weight:700;color:#53645b;margin:10px 0 4px}
-input,textarea{width:100%;padding:11px;border:1px solid #cbd8d0;border-radius:9px;font:inherit;background:#fff}
+input,textarea,select{width:100%;padding:11px;border:1px solid #cbd8d0;border-radius:9px;font:inherit;background:#fff}
 input:disabled,textarea:disabled{background:#f1f4f2;color:#55645d}
+input[type=range]{padding:0;height:28px}
 textarea{min-height:85px;font-size:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .status{font-size:13px;color:#4b6257}.pill{padding:4px 8px;border-radius:20px;background:#e7f3ec;color:#176b50;font-size:12px;font-weight:700}
 small{color:#64756c}.meter{font-variant-numeric:tabular-nums;font-weight:700}
 #message{min-height:20px;font-size:13px;color:#176b50;margin-top:8px}
 #warn{min-height:18px;font-size:13px;font-weight:650;color:#9b4c13;margin-top:6px}
 footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
+.cb{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:700;vertical-align:middle;background:#eef2ef;color:#53645b;cursor:pointer}
+.cb:empty{display:none}
+.cb.ok{background:#e7f3ec;color:#176b50}.cb.chk{background:#fff1cc;color:#8a5a00}.cb.bad{background:#fde1de;color:#a33}.cb.done{background:#e0ecff;color:#1d4f9c}
+input.f-chk{border-color:#e0a100;background:#fffaf0}input.f-bad{border-color:#c0392b;background:#fff5f4}
+#notes{font-size:12px;color:#5a4a1f;margin-top:8px;white-space:pre-wrap}
+.hint{font-size:11px;color:#64756c;margin:3px 0 0}
+details.card summary{font-weight:700;cursor:pointer}
 @media(max-width:440px){.grid{grid-template-columns:1fr 1fr}button{flex:1}}
 </style>
 </head>
@@ -41,7 +49,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  <div class="row spread"><strong>1. Capture one label</strong><span class="pill" id="ocrState">OCR not started</span></div>
  <div id="camwrap" class="camwrap hidden">
   <video id="video" playsinline muted></video>
-  <div class="guideTxt">Fit Batch / Mfg / MRP block inside the box</div>
+  <div class="guideTxt" id="guideTxt">Fit Batch / Mfg / MRP block inside the box</div>
   <div id="guide" class="guide"></div>
  </div>
  <div id="previewBox" class="preview hidden">
@@ -56,6 +64,7 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  </div>
  <p class="status" id="cameraStatus">Use HTTPS (or localhost) and allow camera access. Hold the phone straight on to the label, 15–20 cm away, no glare.</p>
  <div class="row spread"><span class="status">OCR engine</span><span class="status meter" id="ocrProgress">Not loaded</span></div>
+ <div class="status" id="engineLine"></div>
 </section>
 
 <section class="card">
@@ -67,11 +76,12 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  <label for="sku">SKU / Product (optional)</label>
  <input id="sku" placeholder="Enter SKU or product" disabled>
  <div class="grid">
-  <div><label for="batch">Batch / Lot No.</label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
-  <div><label for="mfg">MFG date</label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
+  <div><label for="batch">Batch / Lot No.<span class="cb" id="cb_batch"></span></label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
+  <div><label for="mfg">MFG date<span class="cb" id="cb_mfg"></span></label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
   <div><label for="bbMonths">Best before (months)</label><input id="bbMonths" type="number" min="1" max="240" placeholder="e.g. 24" disabled></div>
-  <div><label for="expiry">Expiry date (if printed)</label><input id="expiry" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
+  <div><label for="expiry">Expiry date (if printed)<span class="cb" id="cb_exp"></span></label><input id="expiry" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
  </div>
+ <div id="notes"></div>
  <label for="rawText">Recognized raw text (correct if needed)</label>
  <textarea id="rawText" disabled></textarea>
 
@@ -96,28 +106,262 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 <section class="card">
  <div class="row spread"><strong>4. Recent records</strong><button id="exportBtn" class="secondary">Export CSV</button></div>
  <div id="recent" class="status">No records saved yet.</div>
+ <div id="acc" class="status" style="margin-top:8px"></div>
 </section>
-<footer>Prototype v0.4 · Dot-matrix image pipeline · Verify every field before saving</footer>
+
+<details class="card" id="tplCard">
+ <summary>5. Product template (optional)</summary>
+ <label for="tplSel">Saved templates</label>
+ <select id="tplSel"><option value="">(none – default settings)</option></select>
+ <label for="tplName">Template name</label>
+ <input id="tplName" placeholder="e.g. Aqualogica tube">
+ <label for="tplMasks">Batch format(s)</label>
+ <input id="tplMasks" value="LLLYMDDD, LLYMDDD" autocapitalize="characters">
+ <p class="hint">L = letter, D = digit, X = letter or digit, M = month letter (A–L), Y = year digit. AAP6G170 = LLLYMDDD. Separate several formats with commas.</p>
+ <div class="grid">
+  <div><label for="tplDate">Date format</label>
+   <select id="tplDate"><option value="auto">Auto</option><option value="MM/YY">MM/YY (08/26)</option><option value="DD/MM/YYYY">DD/MM/YYYY</option><option value="MON.YY">MON.YY (JUL.26)</option></select></div>
+  <div><label for="tplMonths">Default shelf life (months)</label><input id="tplMonths" type="number" min="1" max="120" placeholder="optional"></div>
+ </div>
+ <label>Scan rectangle (move it to where the print sits)</label>
+ <div class="grid">
+  <div><small>Left %</small><input id="gLeft" type="range" min="0" max="40" value="4"></div>
+  <div><small>Width %</small><input id="gWidth" type="range" min="40" max="100" value="92"></div>
+  <div><small>Top %</small><input id="gTop" type="range" min="0" max="80" value="32"></div>
+  <div><small>Height %</small><input id="gHeight" type="range" min="10" max="70" value="34"></div>
+ </div>
+ <div class="row" style="margin-top:10px"><button id="tplSave" class="secondary">Save template</button><button id="tplDel" class="secondary">Delete</button></div>
+ <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
+</details>
+
+<footer>Prototype v0.5 · OpenCV enhance · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script>
 (() => {
- const $ = id => document.getElementById(id);
- const DB_KEY='wbs_records_v1', URL_KEY='wbs_endpoint_v1', MIN_CONF=70;
+/* ==== PURE:START (no DOM access; unit-testable) ==== */
+const MON={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12};
+// Look-alike maps. They are only used when a character VIOLATES the expected pattern at its position.
+const L2D={O:'0',Q:'0',D:'0',I:'1',L:'1',Z:'2',S:'5',G:'6',B:'8',A:'4',T:'7'};
+const D2L={'0':['O','D'],'1':['I','L'],'2':['Z'],'4':['A'],'5':['S'],'6':['G'],'7':['T'],'8':['B']};
+const MASK_TEST={L:c=>/[A-Z]/.test(c),D:c=>/[0-9]/.test(c),X:c=>/[A-Z0-9]/.test(c),M:c=>/[A-L]/.test(c),Y:c=>/[0-9]/.test(c)};
+const DEFAULT_MASKS=['LLLYMDDD','LLYMDDD'];
+const pad2=n=>String(n).padStart(2,'0');
+const yearOk=(y,now)=>{const cy=(now||new Date()).getFullYear();return y>=cy-3&&y<=cy+7};
+const calOk=(y,m,d)=>{if(!(m>=1&&m<=12))return false;if(d==null)return true;const t=new Date(y,m-1,d);return t.getFullYear()===y&&t.getMonth()===m-1&&t.getDate()===d};
+const fixDigits=s=>{let fixed=false;const v=s.replace(/[OQDILSBZ]/g,ch=>{fixed=true;return L2D[ch]});return{v,fixed}};
+
+function findDates(text,fmt,now){
+ const t=(text||'').toUpperCase(),C='[0-9OQDILSBZ]',out=[],spans=[];
+ fmt=fmt||'auto';
+ const push=(idx,y,m,d,fixed)=>{
+  if(!yearOk(y,now)||!calOk(y,m,d))return false;
+  out.push({idx,y,m,d:d||null,fixed:!!fixed,value:d?`${y}-${pad2(m)}-${pad2(d)}`:`${pad2(m)}/${y}`});
+  return true;
+ };
+ const toY=s=>s.length===2?2000+(+s):(s.length===4?+s:NaN);
+ let m;
+ if(fmt==='auto'||fmt==='DD/MM/YYYY'){
+  const re=new RegExp(`(?<![A-Z0-9.])(${C}{1,2})\\s*([\\/.\\-,])\\s*(${C}{1,2})\\s*\\2\\s*(${C}{2,4})(?![A-Z0-9])`,'g');
+  while((m=re.exec(t))){
+   const a=fixDigits(m[1]),b=fixDigits(m[3]),y=fixDigits(m[4]);
+   let d=+a.v,mo=+b.v;
+   if(mo>12&&d<=12){const x=d;d=mo;mo=x}
+   if(push(m.index,toY(y.v),mo,d,a.fixed||b.fixed||y.fixed))spans.push([m.index,m.index+m[0].length]);
+  }
+ }
+ if(fmt==='auto'||fmt==='MM/YY'){
+  const re=new RegExp(`(?<![A-Z0-9.])(${C}{1,2})\\s*([\\/.\\-,])\\s*(${C}{2,4})(?![A-Z0-9])`,'g');
+  while((m=re.exec(t))){
+   if(spans.some(s=>m.index>=s[0]&&m.index<s[1]))continue;
+   const a=fixDigits(m[1]),y=fixDigits(m[3]);
+   push(m.index,toY(y.v),+a.v,null,a.fixed||y.fixed);
+  }
+ }
+ if(fmt==='auto'||fmt==='MON.YY'){
+  const re=/(?<![A-Z])(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s*[\/\-,]?\s*(\d{2}|\d{4})(?!\d)/g;
+  while((m=re.exec(t)))push(m.index,toY(m[2]),MON[m[1]],null,false);
+ }
+ return out;
+}
+
+// MFG = earliest date; EXP = a later date 6-60 months after MFG. Position on the label is NOT used,
+// because printed values often sit one row off from their labels.
+function pickMfgExp(dates){
+ const seen=new Set(),ds=[];
+ [...dates].sort((a,b)=>a.idx-b.idx).forEach(d=>{if(!seen.has(d.value)){seen.add(d.value);ds.push(d)}});
+ if(!ds.length)return{};
+ if(ds.length===1)return{mfg:ds[0]};
+ const key=d=>d.y*12+d.m,sorted=[...ds].sort((a,b)=>key(a)-key(b)),mfg=sorted[0];
+ const exp=sorted.slice(1).find(d=>{const diff=key(d)-key(mfg);return diff>=6&&diff<=60});
+ return{mfg,exp};
+}
+
+function crossCheck(b,mask,mfg){
+ if(!mfg||!mask)return'na';
+ const iM=mask.indexOf('M'),iY=mask.indexOf('Y'),res=[];
+ if(iM>=0)res.push(b.charCodeAt(iM)-64===mfg.m);
+ if(iY>=0)res.push(+b[iY]===mfg.y%10);
+ if(!res.length)return'na';
+ return res.every(Boolean)?'match':'mismatch';
+}
+
+// Fix a token against one format mask. A character is only changed when it breaks the mask at that
+// position AND the look-alike satisfies it. At most 2 changes; otherwise the token is rejected.
+function fixBatchToken(tok,masks,mfg){
+ let best=null;
+ for(const mask of masks){
+  if(mask.length!==tok.length)continue;
+  let combos=[{s:'',fixes:[]}],ok=true;
+  for(let i=0;i<mask.length&&ok;i++){
+   const mc=mask[i],c=tok[i],test=MASK_TEST[mc];
+   let opts;
+   if(test(c))opts=[{c,fix:null}];
+   else{
+    const alts=[];
+    if(mc==='L'||mc==='M')(D2L[c]||[]).forEach(x=>{if(test(x))alts.push({c:x,fix:`${c}→${x}`})});
+    else if((mc==='D'||mc==='Y')&&L2D[c])alts.push({c:L2D[c],fix:`${c}→${L2D[c]}`});
+    if(!alts.length){ok=false;break}
+    opts=alts;
+   }
+   const nx=[];
+   for(const cb of combos)for(const o of opts){
+    const fixes=o.fix?cb.fixes.concat([{pos:i+1,txt:o.fix,role:mc}]):cb.fixes;
+    if(fixes.length<=2)nx.push({s:cb.s+o.c,fixes});
+   }
+   combos=nx;if(!combos.length)ok=false;
+  }
+  if(!ok)continue;
+  for(const cb of combos){
+   const cross=crossCheck(cb.s,mask,mfg);
+   const score=cb.fixes.length*10+(cross==='mismatch'?6:0)-(cross==='match'?4:0);
+   if(!best||score<best.score)best={value:cb.s,fixes:cb.fixes,mask,cross,score,raw:tok};
+  }
+ }
+ return best;
+}
+
+function batchTokens(text){
+ const U=(text||'').toUpperCase(),all=new Set(),direct=new Set();
+ const m=U.match(/BATCH\s*(?:NO|NUMBER|CODE)?[^A-Z0-9]{0,6}([A-Z0-9]{5,10})/);
+ if(m){all.add(m[1]);direct.add(m[1])}
+ U.split(/\n/).forEach(line=>{
+  (line.match(/[A-Z0-9]{5,10}/g)||[]).forEach(t=>{all.add(t);direct.add(t)});
+  const j=line.replace(/[^A-Z0-9]/g,'');          // joined line: only used for strict format matches
+  if(j.length>=6&&j.length<=9)all.add(j);
+ });
+ return{all:[...all],direct};
+}
+
+function pickBatch(text,masks,mfg){
+ const bt=batchTokens(text),toks=bt.all;
+ let strict=null;
+ for(const t of toks){const f=fixBatchToken(t,masks,mfg);if(f&&(!strict||f.score<strict.score))strict=f}
+ if(strict)return{value:strict.value,raw:strict.raw,fixes:strict.fixes,mask:strict.mask,validity:strict.fixes.length?0.85:1,shape:'ok'};
+ for(const t of toks){
+  if(!bt.direct.has(t))continue;
+  if(t.length>=6&&t.length<=10&&(t.match(/[0-9]/g)||[]).length>=2&&(t.match(/[A-Z]/g)||[]).length>=2)
+   return{value:t,raw:t,fixes:[],mask:null,validity:0.35,shape:'loose'};
+ }
+ return null;
+}
+
+function extractFields(text,ctx,now){
+ ctx=ctx||{};
+ const masks=ctx.masks&&ctx.masks.length?ctx.masks:DEFAULT_MASKS;
+ const dates=findDates(text,ctx.dateFmt,now),pm=pickMfgExp(dates);
+ const batch=pickBatch(text,masks,pm.mfg);
+ let months=null;
+ const mm=(text||'').toUpperCase().match(/(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)\b/);
+ if(mm){const n=+mm[1]*(/^Y/.test(mm[2])?12:1);if(n>=3&&n<=120)months=n}
+ return{batch,mfg:pm.mfg||null,exp:pm.exp||null,months};
+}
+
+function wordConf(words,token,fallback){
+ if(!token||!words||!words.length)return fallback;
+ const T=token.toUpperCase();let best=null;
+ for(const w of words){
+  const c=(w.t||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(c&&(c===T||(c.length>=4&&T.includes(c))||(T.length>=4&&c.includes(T))))best=best===null?w.c:Math.min(best,w.c);
+ }
+ return best===null?fallback:best;
+}
+
+// Combine every read (engine x image variant). Each field is voted on; confidence is a heuristic
+// score (agreement + format validity + cross-checks), NOT a calibrated probability.
+function fuse(reads,ctx,now){
+ const maps={batch:new Map(),mfg:new Map(),exp:new Map(),months:new Map()};
+ const add=(k,key,w,info)=>{
+  const mp=maps[k],e=mp.get(key)||{key,w:0,n:0,best:0,info:null,engines:new Set()};
+  e.w+=w;e.n++;e.engines.add(info.engine);
+  if(w>=e.best){e.best=w;e.info=info}
+  mp.set(key,e);
+ };
+ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+ reads.forEach((r,i)=>{
+  const p=extractFields(r.text,ctx,now),rw=r.weight||1,base=rw*clamp((r.conf||0)/100,.25,1),meta={engine:r.engine,variant:r.variant,idx:i};
+  if(p.batch){const wc=wordConf(r.words,p.batch.raw,(r.conf||0)*.85)/100;add('batch',p.batch.value,rw*clamp(wc,.25,1)*p.batch.validity,{...meta,...p.batch})}
+  if(p.mfg)add('mfg',p.mfg.value,base*(p.mfg.fixed?.8:1),{...meta,...p.mfg});
+  if(p.exp)add('exp',p.exp.value,base*(p.exp.fixed?.8:1),{...meta,...p.exp});
+  if(p.months)add('months',String(p.months),base,meta);
+ });
+ const res={};
+ for(const k of Object.keys(maps)){
+  const list=[...maps[k].values()].sort((a,b)=>b.w-a.w);
+  if(!list.length){res[k]=null;continue}
+  const top=list[0],total=list.reduce((s,e)=>s+e.w,0);
+  res[k]={value:top.key,n:top.n,info:top.info,share:top.w/total,alts:list.slice(1,4).map(e=>({value:e.key,n:e.n})),engines:[...top.engines]};
+ }
+ const conf=(r,validity,pen,bonus)=>{
+  if(!r)return 0;
+  let c=100*(.4*r.share+.3*Math.min(1,r.n/2)+.3*validity)-pen+(bonus||0);
+  if(r.n<2)c=Math.min(c,74);          // a single read can never be "OK"
+  return clamp(Math.round(c),0,99);
+ };
+ if(res.batch){
+  const b=res.batch,i=b.info;
+  b.fixes=i.fixes||[];b.shape=i.shape;
+  b.cross=crossCheck(b.value,i.mask,res.mfg?res.mfg.info:null);
+  b.conf=conf(b,i.validity,10*b.fixes.length,b.cross==='match'?8:(b.cross==='mismatch'?-15:0));
+  if(b.fixes.length)b.conf=Math.min(b.conf,79);   // corrected characters are always flagged for a look
+ }
+ if(res.mfg)res.mfg.conf=conf(res.mfg,res.mfg.info.fixed?.8:1,res.mfg.info.fixed?8:0,0);
+ if(res.exp)res.exp.conf=conf(res.exp,res.exp.info.fixed?.8:1,res.exp.info.fixed?8:0,0);
+ if(res.months)res.months.conf=conf(res.months,1,0,0);
+ return res;
+}
+/* ==== PURE:END ==== */
+
+ const $=id=>document.getElementById(id);
+ const DB_KEY='wbs_records_v1',URL_KEY='wbs_endpoint_v1',TPL_KEY='wbs_templates_v1',TPL_ACTIVE='wbs_tpl_active_v1';
  const FIELDS=['sku','batch','mfg','bbMonths','expiry','rawText'];
- let worker=null, stream=null, state='idle', current=null, sessionSaved=0;
+ const FIELD_MAP={batch:'batch',mfg:'mfg',exp:'expiry'};
+ // Self-host opencv.js in your repo (put the file next to index.html and set this to 'opencv.js') for reliability/offline use.
+ const OPENCV_URL='https://docs.opencv.org/4.x/opencv.js';
+ const MAX_READS=6;            // max OCR attempts per label
+ const REQUIRE_CONFIRM=false;  // true = Save is blocked until every yellow/red field is edited or its badge tapped
+ // PaddleOCR (ONNX) adapter. OFF by default and UNTESTED here: needs model files in your repo and the library API may differ.
+ const PADDLE_CFG={enabled:false,lib:'https://esm.sh/@gutenye/ocr-browser',
+  models:{detectionPath:'models/ch_PP-OCRv4_det_infer.onnx',recognitionPath:'models/ch_PP-OCRv4_rec_infer.onnx',dictionaryPath:'models/ppocr_keys_v1.txt'}};
+ const WL='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/.,:- ';
+ let worker=null,stream=null,state='idle',current=null,sessionSaved=0;
+ let cvReady=false,cvFail=false,cvPromise=null,paddle=null,paddleErr='';
+ let flags={},verified={};
 
  const getRecords=()=>{try{return JSON.parse(localStorage.getItem(DB_KEY)||'[]')}catch{return []}};
- const setRecords=r=>localStorage.setItem(DB_KEY,JSON.stringify(r));
+ const setRecords=r=>{try{localStorage.setItem(DB_KEY,JSON.stringify(r));return true}catch(e){return false}};
  const endpoint=()=>localStorage.getItem(URL_KEY)||'';
  const val=id=>$(id).value.trim();
  const setMessage=(s,err=false)=>{$('message').textContent=s;$('message').style.color=err?'#a33':'#176b50'};
  const setWarn=s=>{$('warn').textContent=s};
+ const nz=s=>String(s==null?'':s).trim().toUpperCase().replace(/\s+/g,'');
+ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
+ /* ---------- UI state ---------- */
  function setState(s){
   state=s;
-  const idle=s==='idle', live=s==='live', cap=s==='captured';
+  const idle=s==='idle',live=s==='live',cap=s==='captured';
   $('camwrap').classList.toggle('hidden',!live);
   $('previewBox').classList.toggle('hidden',!cap);
   $('startBtn').disabled=!idle;
@@ -128,119 +372,139 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   FIELDS.forEach(id=>$(id).disabled=!cap);
   $('stateLabel').textContent={idle:'Camera off',live:'Camera live',captured:'Captured · verify'}[s];
   $('reviewHint').textContent=cap
-    ?'Check every field against the photo above. Correct anything wrong, then Save.'
+    ?'Check every field against the photo above. Yellow/red fields need a look: edit them, or tap the badge to confirm.'
     :'Capture a label to review its fields. Nothing is saved until you tap Save.';
  }
-
+ function clearBadges(){
+  ['batch','mfg','exp'].forEach(k=>{const b=$('cb_'+k);b.className='cb';b.textContent='';$(FIELD_MAP[k]).classList.remove('f-chk','f-bad')});
+  flags={};verified={};$('notes').textContent='';
+ }
  function resetCapture(){
   current=null;
   FIELDS.forEach(id=>$(id).value='');
   $('preview').removeAttribute('src');
   $('ocrConf').textContent='';
-  setWarn('');
+  setWarn('');clearBadges();
  }
-
  function stopStream(){
   if(stream)stream.getTracks().forEach(t=>t.stop());
-  stream=null;
-  $('video').srcObject=null;
+  stream=null;$('video').srcObject=null;
+ }
+ function updateEngineLine(){
+  $('engineLine').textContent='Enhancer: '+(cvReady?'OpenCV ready':(cvFail?'basic (OpenCV did not load)':'OpenCV not loaded yet'))
+   +' · OCR: Tesseract'+(PADDLE_CFG.enabled?(paddle?' + Paddle':' (Paddle failed'+(paddleErr?': '+paddleErr:'')+')'):'');
  }
 
+ /* ---------- Confidence badges ---------- */
+ const band=c=>c>=80?'ok':(c>=55?'chk':'bad');
+ function setBadge(k,res,optional){
+  const el=$('cb_'+k),inp=$(FIELD_MAP[k]);
+  inp.classList.remove('f-chk','f-bad');
+  if(!res){
+   if(optional){el.className='cb';el.textContent='not read'}
+   else{el.className='cb bad';el.textContent='not found';inp.classList.add('f-bad');flags[k]='bad'}
+   return;
+  }
+  const b=band(res.conf);
+  el.className='cb '+b;
+  el.textContent=res.conf+'%'+(b==='ok'?'':(b==='chk'?' · check':' · verify'));
+  if(b!=='ok'){inp.classList.add(b==='chk'?'f-chk':'f-bad');flags[k]=b}
+ }
+ function markChecked(k){
+  if(state!=='captured')return;
+  verified[k]=true;
+  const el=$('cb_'+k);el.className='cb done';el.textContent='✓ checked';
+  $(FIELD_MAP[k]).classList.remove('f-chk','f-bad');
+ }
+ ['batch','mfg','exp'].forEach(k=>{
+  $('cb_'+k).onclick=e=>{e.preventDefault();e.stopPropagation();markChecked(k)};
+  $(FIELD_MAP[k]).addEventListener('input',()=>markChecked(k));
+ });
+
+ /* ---------- Templates ---------- */
+ const DEF_GUIDE={left:4,top:32,width:92,height:34};
+ const getTpls=()=>{try{return JSON.parse(localStorage.getItem(TPL_KEY)||'{}')}catch{return{}}};
+ const setTpls=t=>{try{localStorage.setItem(TPL_KEY,JSON.stringify(t));return true}catch(e){return false}};
+ function readGuide(){return{left:+$('gLeft').value,top:+$('gTop').value,width:+$('gWidth').value,height:+$('gHeight').value}}
+ function applyGuide(g){
+  const el=$('guide');
+  el.style.left=g.left+'%';el.style.width=g.width+'%';el.style.top=g.top+'%';el.style.height=g.height+'%';el.style.right='auto';
+  $('guideTxt').style.top='calc('+g.top+'% - 26px)';
+ }
+ function setGuideSliders(g){$('gLeft').value=g.left;$('gTop').value=g.top;$('gWidth').value=g.width;$('gHeight').value=g.height;applyGuide(g)}
+ function parseMasks(s){const a=(s||'').toUpperCase().split(/[\s,;]+/).filter(x=>/^[LDXMY]+$/.test(x));return a.length?a:DEFAULT_MASKS}
+ function activeCtx(){return{masks:parseMasks($('tplMasks').value),dateFmt:$('tplDate').value||'auto',months:+$('tplMonths').value||null}}
+ function refreshTplSelect(selected){
+  const t=getTpls(),sel=$('tplSel');
+  sel.innerHTML='<option value="">(none – default settings)</option>';
+  Object.keys(t).sort().forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o)});
+  sel.value=selected&&t[selected]?selected:'';
+ }
+ function loadTpl(name){
+  const t=getTpls()[name];
+  if(!t){
+   $('tplName').value='';$('tplMasks').value='LLLYMDDD, LLYMDDD';$('tplDate').value='auto';$('tplMonths').value='';
+   setGuideSliders(DEF_GUIDE);
+  }else{
+   $('tplName').value=name;$('tplMasks').value=t.masks||'LLLYMDDD, LLYMDDD';$('tplDate').value=t.dateFmt||'auto';
+   $('tplMonths').value=t.months||'';setGuideSliders(t.guide||DEF_GUIDE);
+  }
+  try{localStorage.setItem(TPL_ACTIVE,name||'')}catch(e){}
+ }
+ $('tplSel').onchange=()=>loadTpl($('tplSel').value);
+ ['gLeft','gTop','gWidth','gHeight'].forEach(id=>$(id).addEventListener('input',()=>applyGuide(readGuide())));
+ $('tplSave').onclick=()=>{
+  const name=val('tplName');
+  if(!name){setMessage('Enter a template name first.',true);return}
+  const t=getTpls();
+  t[name]={masks:$('tplMasks').value.trim(),dateFmt:$('tplDate').value,months:+$('tplMonths').value||null,guide:readGuide()};
+  if(!setTpls(t)){setMessage('Could not save template (storage full).',true);return}
+  refreshTplSelect(name);try{localStorage.setItem(TPL_ACTIVE,name)}catch(e){}
+  setMessage('Template "'+name+'" saved.');
+ };
+ $('tplDel').onclick=()=>{
+  const name=$('tplSel').value;
+  if(!name){setMessage('Select a saved template to delete.',true);return}
+  const t=getTpls();delete t[name];setTpls(t);refreshTplSelect('');loadTpl('');
+  setMessage('Template deleted.');
+ };
+
+ /* ---------- Records, counts, accuracy ---------- */
+ function renderAccuracy(){
+  const rows=getRecords().filter(x=>x.ocrOriginal&&x.edited);
+  if(!rows.length){$('acc').textContent='Accuracy log: no scans with stored original OCR yet.';return}
+  const parts=['batch','mfg','exp'].map(k=>{
+   const fin=k==='exp'?'expiry':k;
+   const rel=rows.filter(x=>nz(x.ocrOriginal[k])!==''||nz(x[fin])!=='');
+   if(!rel.length)return null;
+   const ok=rel.filter(x=>!x.edited[k]).length;
+   return k.toUpperCase()+' '+Math.round(100*ok/rel.length)+'% ('+ok+'/'+rel.length+')';
+  }).filter(Boolean);
+  $('acc').textContent='Accuracy log ('+rows.length+' scans, read correctly with no edit): '+parts.join(' · ');
+ }
  function updateCounts(){
   const r=getRecords(),pending=r.filter(x=>!x.uploaded).length;
   $('pendingCount').textContent=pending;
   $('savedCount').textContent=sessionSaved;
   $('syncState').textContent=endpoint()?'URL saved':'Not configured';
   $('recent').innerHTML='';
-  if(!r.length){$('recent').textContent='No records saved yet.';return}
-  r.slice(-5).reverse().forEach(x=>{
+  if(!r.length){$('recent').textContent='No records saved yet.'}
+  else r.slice(-5).reverse().forEach(x=>{
    const d=document.createElement('div');
    d.style.cssText='padding:7px 0;border-bottom:1px solid #edf1ee;font-size:13px';
    d.textContent=`${x.batch||'(no batch)'} · MFG ${x.mfg||'?'} · BB ${x.bestBeforeMonths||'?'} mo · ${x.uploaded?'Uploaded':'Pending'}`;
    $('recent').appendChild(d);
   });
+  renderAccuracy();
  }
 
- /* ---------- Date parsing ---------- */
- const pad=n=>String(n).padStart(2,'0');
- function validYear(s){
-  const y=+s;
-  if(s.length===2)return (y>=18&&y<=50)?2000+y:0;
-  if(s.length===4)return (y>=2018&&y<=2050)?y:0;
-  return 0;
- }
- // Returns [{idx, out}] for every plausible date. Month-only dates -> MM/YYYY.
- function findDates(text){
-  const out=[];
-  const re=/(?<!\d)(\d{1,2})\s*([\/.\-,])\s*(\d{1,2})\s*\2\s*(\d{2,4})(?!\d)|(?<![\d.])(\d{1,2})\s*([\/.\-,])\s*(\d{2,4})(?!\d)/g;
-  let m;
-  while((m=re.exec(text))){
-   if(m[1]!==undefined){
-    let a=+m[1],b=+m[3],y=validYear(m[4]);
-    if(!y)continue;
-    let day,month;
-    if(a>12){day=a;month=b}else if(b>12){month=a;day=b}else{day=a;month=b} // ambiguous -> DD/MM
-    if(month<1||month>12||day<1||day>31)continue;
-    out.push({idx:m.index,out:`${y}-${pad(month)}-${pad(day)}`});
-   }else{
-    const month=+m[5],y=validYear(m[7]);
-    if(!y||month<1||month>12)continue;
-    out.push({idx:m.index,out:`${pad(month)}/${y}`});
-   }
-  }
-  return out;
- }
-
- /* ---------- Field extraction ---------- */
- function extract(text){
-  const t=(text||'').replace(/\r/g,'');
-  const U=t.toUpperCase();
-  const dates=findDates(t);
-  let mfg='',expiry='',months='',batch='';
-
-  // MFG: first date after an MFG/MFD label, else first date anywhere
-  const ml=U.search(/\b(MFG|MFD|MANUF\w*|M\.F\.G)\b/);
-  if(ml>=0){const d=dates.find(x=>x.idx>ml);if(d)mfg=d.out}
-  if(!mfg&&dates.length)mfg=dates[0].out;
-
-  // Expiry: only if an EXP / USE BY label is followed by a date
-  const el=U.search(/\b(EXP|EXPIRY|EXPIRES|USE\s*BY)\b/);
-  if(el>=0){const d=dates.find(x=>x.idx>el&&x.out!==mfg);if(d)expiry=d.out}
-
-  // Shelf life: "Use Before 24 Months", "Best Before 24 months", or any "N months"
-  let m=t.match(/(?:USE|BEST)\s*BEFORE\D{0,12}?(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)/i)
-     ||t.match(/(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)\b/i);
-  if(m)months=String(+m[1]*(/Y/i.test(m[2])?12:1));
-
-  // Batch: value after the label (same line or following), must contain a digit
-  const bad=/^(MFG|MFD|MFG\.|DATE|MRP|EXP|BEST|USE|NO|NET)$/i;
-  m=t.match(/\b(?:BATCH|LOT)\s*(?:NO\.?|NUMBER|CODE)?\s*[:#.\-]*\s*([A-Z0-9][A-Z0-9\/_-]{3,})/i);
-  if(m&&/\d/.test(m[1])&&!bad.test(m[1]))batch=m[1];
-  if(!batch){
-   // Fallback for column layouts: first token mixing letters and digits, 5-14 chars
-   const re=/\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9-]{5,14}\b/g;
-   let c;
-   while((c=re.exec(U))){
-    if(/^\d/.test(c[0])&&/^\d+[A-Z]{0,2}$/.test(c[0]))continue;
-    batch=c[0];break;
-   }
-  }
-  return {batch:batch.toUpperCase(),mfg,bestBeforeMonths:months,expiry};
- }
-
- /* ---------- Image preparation ---------- */
- function copyCanvas(src){
-  const c=document.createElement('canvas');c.width=src.width;c.height=src.height;
-  c.getContext('2d').drawImage(src,0,0);return c;
- }
+ /* ---------- Image preparation: fallback (no OpenCV) ---------- */
+ function copyCanvas(src){const c=document.createElement('canvas');c.width=src.width;c.height=src.height;c.getContext('2d').drawImage(src,0,0);return c}
  function grayStretch(c){
   const ctx=c.getContext('2d',{willReadFrequently:true});
   const img=ctx.getImageData(0,0,c.width,c.height),d=img.data;
   let min=255,max=0;
-  for(let i=0;i<d.length;i+=4){
-   const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-   d[i]=d[i+1]=d[i+2]=g;if(g<min)min=g;if(g>max)max=g;
-  }
+  for(let i=0;i<d.length;i+=4){const g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];d[i]=d[i+1]=d[i+2]=g;if(g<min)min=g;if(g>max)max=g}
   const range=Math.max(1,max-min);
   for(let i=0;i<d.length;i+=4){const v=Math.round((d[i]-min)*255/range);d[i]=d[i+1]=d[i+2]=v}
   ctx.putImageData(img,0,0);
@@ -262,70 +526,34 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   for(let i=0;i<d.length;i+=4){const v=d[i]>th?255:0;d[i]=d[i+1]=d[i+2]=v}
   ctx.putImageData(img,0,0);
  }
-
- // Crop the yellow guide box out of the live video and enlarge it.
- function cropGuide(){
-  const v=$('video'),vb=v.getBoundingClientRect(),gb=$('guide').getBoundingClientRect();
-  const vw=v.videoWidth,vh=v.videoHeight;
-  const s=Math.max(vb.width/vw,vb.height/vh);              // object-fit: cover
-  const ox=(vw*s-vb.width)/2,oy=(vh*s-vb.height)/2;
-  let sx=(gb.left-vb.left+ox)/s,sy=(gb.top-vb.top+oy)/s,sw=gb.width/s,sh=gb.height/s;
-  sx=Math.max(0,sx);sy=Math.max(0,sy);
-  sw=Math.min(sw,vw-sx);sh=Math.min(sh,vh-sy);
-  const k=Math.max(1,Math.min(3,1600/sw));
-  const c=$('canvas');
-  c.width=Math.round(sw*k);c.height=Math.round(sh*k);
-  const ctx=c.getContext('2d',{willReadFrequently:true});
-  ctx.imageSmoothingQuality='high';
-  ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
-  return c;
- }
-
- // Dot-matrix pipeline: adaptive threshold + morphological closing.
- const BATCH_RE=/^[A-Z]{2}\d[A-Z]\d{3}$/;   // fits AS6D026; edit for your formats (used for preference only)
- const WL='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/.,:- ';
-
  function adaptiveFg(c,win,off){
   const w=c.width,h=c.height;
   const d=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data;
   const gray=new Uint8Array(w*h);
   for(let i=0,p=0;i<d.length;i+=4,p++)gray[p]=(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2])|0;
   const W=w+1,I=new Float64Array(W*(h+1));
-  for(let y=1;y<=h;y++){
-   let row=0;
-   for(let x=1;x<=w;x++){row+=gray[(y-1)*w+(x-1)];I[y*W+x]=I[(y-1)*W+x]+row}
-  }
+  for(let y=1;y<=h;y++){let row=0;for(let x=1;x<=w;x++){row+=gray[(y-1)*w+(x-1)];I[y*W+x]=I[(y-1)*W+x]+row}}
   const fg=new Uint8Array(w*h),r=win>>1;
   for(let y=0;y<h;y++){
    const y0=Math.max(0,y-r),y1=Math.min(h,y+r+1);
    for(let x=0;x<w;x++){
-    const x0=Math.max(0,x-r),x1=Math.min(w,x+r+1);
-    const area=(x1-x0)*(y1-y0);
+    const x0=Math.max(0,x-r),x1=Math.min(w,x+r+1),area=(x1-x0)*(y1-y0);
     const sum=I[y1*W+x1]-I[y0*W+x1]-I[y1*W+x0]+I[y0*W+x0];
     fg[y*w+x]=gray[y*w+x]<(sum/area-off)?1:0;
    }
   }
   return fg;
  }
- // Separable square max (dilate) or min (erode) filter on a 0/1 mask.
  function morph(fg,w,h,r,dilate){
   const tmp=new Uint8Array(w*h),out=new Uint8Array(w*h),init=dilate?0:1;
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
    let v=init;
-   for(let k=-r;k<=r;k++){
-    const xx=x+k;if(xx<0||xx>=w)continue;
-    const p=fg[y*w+xx];
-    if(dilate){if(p){v=1;break}}else{if(!p){v=0;break}}
-   }
+   for(let k=-r;k<=r;k++){const xx=x+k;if(xx<0||xx>=w)continue;const p=fg[y*w+xx];if(dilate){if(p){v=1;break}}else{if(!p){v=0;break}}}
    tmp[y*w+x]=v;
   }
   for(let y=0;y<h;y++)for(let x=0;x<w;x++){
    let v=init;
-   for(let k=-r;k<=r;k++){
-    const yy=y+k;if(yy<0||yy>=h)continue;
-    const p=tmp[yy*w+x];
-    if(dilate){if(p){v=1;break}}else{if(!p){v=0;break}}
-   }
+   for(let k=-r;k<=r;k++){const yy=y+k;if(yy<0||yy>=h)continue;const p=tmp[yy*w+x];if(dilate){if(p){v=1;break}}else{if(!p){v=0;break}}}
    out[y*w+x]=v;
   }
   return out;
@@ -336,22 +564,89 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   for(let p=0,i=0;p<fg.length;p++,i+=4){const v=fg[p]?0:255;d[i]=d[i+1]=d[i+2]=v;d[i+3]=255}
   ctx.putImageData(img,0,0);return c;
  }
- // Three closing strengths; returns an array of canvases to OCR.
  function dotVariants(src){
-  // work at ~1000px wide to keep it fast on phones
-  const k=Math.min(1,1000/src.width);
-  const s=document.createElement('canvas');
+  const k=Math.min(1,1000/src.width),s=document.createElement('canvas');
   s.width=Math.round(src.width*k);s.height=Math.round(src.height*k);
   s.getContext('2d').drawImage(src,0,0,s.width,s.height);
-  const w=s.width,h=s.height;
-  const fg=adaptiveFg(s,31,6);
-  return [1,2,3].map(r=>{
-   const closed=morph(morph(fg,w,h,r,true),w,h,r,false);   // dilate then erode
-   return fgToCanvas(closed,w,h);
-  });
+  const w=s.width,h=s.height,fg=adaptiveFg(s,31,6);
+  return [1,2,3].map(r=>fgToCanvas(morph(morph(fg,w,h,r,true),w,h,r,false),w,h));
+ }
+ function basicVariants(c){
+  const g=copyCanvas(c);grayStretch(g);
+  const b=copyCanvas(g);otsu(b);
+  return [{name:'gray',canvas:g,mode:'block'},{name:'otsu',canvas:b,mode:'sparse'},
+          ...dotVariants(g).map((x,i)=>({name:'dot'+(i+1),canvas:x,mode:'sparse'}))];
  }
 
- /* ---------- OCR ---------- */
+ /* ---------- Image preparation: OpenCV.js ---------- */
+ function loadScript(src,ms){
+  return new Promise((res,rej)=>{
+   const s=document.createElement('script');s.src=src;s.async=true;
+   const t=setTimeout(()=>rej(new Error('timeout')),ms);
+   s.onload=()=>{clearTimeout(t);res()};
+   s.onerror=()=>{clearTimeout(t);rej(new Error('load failed'))};
+   document.head.appendChild(s);
+  });
+ }
+ function initCV(){
+  if(cvPromise)return cvPromise;
+  cvPromise=(async()=>{
+   try{
+    if(!(window.cv&&window.cv.Mat))await loadScript(OPENCV_URL,90000);
+    const t0=Date.now();
+    while(!(window.cv&&window.cv.Mat)){if(Date.now()-t0>90000)throw new Error('init timeout');await sleep(150)}
+    cvReady=true;
+   }catch(e){cvFail=true}
+   updateEngineLine();return cvReady;
+  })();
+  return cvPromise;
+ }
+ // grayscale -> 2-3x upscale -> bilateral denoise -> CLAHE -> unsharp -> thresholds
+ function cvVariants(src){
+  const out=[],mats=[],K=m=>{mats.push(m);return m};
+  const toCanvas=m=>{const c=document.createElement('canvas');cv.imshow(c,m);return c};
+  try{
+   const rgba=K(cv.imread(src));
+   const gray=K(new cv.Mat());cv.cvtColor(rgba,gray,cv.COLOR_RGBA2GRAY);
+   const k=Math.max(1,Math.min(3,1600/gray.cols));
+   const up=K(new cv.Mat());cv.resize(gray,up,new cv.Size(Math.round(gray.cols*k),Math.round(gray.rows*k)),0,0,cv.INTER_CUBIC);
+   const den=K(new cv.Mat());cv.bilateralFilter(up,den,5,35,35);
+   const eq=K(new cv.Mat()),clahe=new cv.CLAHE(2.0,new cv.Size(8,8));clahe.apply(den,eq);clahe.delete();
+   const blur=K(new cv.Mat());cv.GaussianBlur(eq,blur,new cv.Size(0,0),2);
+   const sharp=K(new cv.Mat());cv.addWeighted(eq,1.6,blur,-0.6,0,sharp);
+   out.push({name:'clahe-sharp',canvas:toCanvas(sharp),mode:'block'});
+   let bs=Math.round(up.rows/18);if(bs%2===0)bs++;bs=Math.max(15,bs);
+   const th=K(new cv.Mat());cv.adaptiveThreshold(sharp,th,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,bs,8);
+   out.push({name:'adaptive',canvas:toCanvas(th),mode:'sparse'});
+   const inv=K(new cv.Mat());cv.bitwise_not(th,inv);
+   const ker=K(cv.getStructuringElement(cv.MORPH_ELLIPSE,new cv.Size(3,3)));
+   const cl=K(new cv.Mat());cv.morphologyEx(inv,cl,cv.MORPH_CLOSE,ker);
+   const cl2=K(new cv.Mat());cv.bitwise_not(cl,cl2);
+   out.push({name:'adaptive-dotjoin',canvas:toCanvas(cl2),mode:'sparse'});
+   const ot=K(new cv.Mat());cv.threshold(sharp,ot,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);
+   out.push({name:'otsu',canvas:toCanvas(ot),mode:'sparse'});
+  }finally{mats.forEach(m=>{try{m.delete()}catch(e){}})}
+  return out;
+ }
+
+ // Crop the yellow guide box out of the live video and enlarge it.
+ function cropGuide(){
+  const v=$('video'),vb=v.getBoundingClientRect(),gb=$('guide').getBoundingClientRect();
+  const vw=v.videoWidth,vh=v.videoHeight;
+  const s=Math.max(vb.width/vw,vb.height/vh);
+  const ox=(vw*s-vb.width)/2,oy=(vh*s-vb.height)/2;
+  let sx=(gb.left-vb.left+ox)/s,sy=(gb.top-vb.top+oy)/s,sw=gb.width/s,sh=gb.height/s;
+  sx=Math.max(0,sx);sy=Math.max(0,sy);
+  sw=Math.min(sw,vw-sx);sh=Math.min(sh,vh-sy);
+  const k=Math.max(1,Math.min(3,1600/sw)),c=$('canvas');
+  c.width=Math.round(sw*k);c.height=Math.round(sh*k);
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(v,sx,sy,sw,sh,0,0,c.width,c.height);
+  return c;
+ }
+
+ /* ---------- OCR engines ---------- */
  async function initOCR(){
   if(worker)return;
   $('ocrState').textContent='Loading OCR…';
@@ -360,68 +655,59 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   }});
   $('ocrState').textContent='OCR ready';
  }
- async function ocrPass(canvas,psm,whitelist=''){
-  await worker.setParameters({tessedit_pageseg_mode:psm,preserve_interword_spaces:'1',tessedit_char_whitelist:whitelist});
-  const r=await worker.recognize(canvas);
-  return {text:(r.data.text||'').trim(),conf:Math.round(r.data.confidence||0)};
+ async function initPaddle(){
+  if(!PADDLE_CFG.enabled||paddle)return !!paddle;
+  try{
+   const mod=await import(PADDLE_CFG.lib),Ocr=mod.default||mod.Ocr;
+   paddle=await Ocr.create({models:PADDLE_CFG.models});
+  }catch(e){paddleErr=String(e.message||e).slice(0,60)}
+  updateEngineLine();return !!paddle;
+ }
+ async function tessRead(v){
+  const block=v.mode==='block';
+  await worker.setParameters({
+   tessedit_pageseg_mode:block?Tesseract.PSM.SINGLE_BLOCK:Tesseract.PSM.SPARSE_TEXT,
+   preserve_interword_spaces:'1',tessedit_char_whitelist:block?'':WL});
+  const r=await worker.recognize(v.canvas);
+  return{text:(r.data.text||'').trim(),conf:Math.round(r.data.confidence||0),
+         words:(r.data.words||[]).map(w=>({t:w.text,c:w.confidence}))};
+ }
+ async function paddleRead(v){
+  const res=await paddle.detect(v.canvas.toDataURL('image/png'));
+  const lines=(Array.isArray(res)?res:(res&&res.lines)||[]).map(l=>({t:l.text||'',c:Math.round(100*(l.mean!=null?l.mean:(l.score!=null?l.score:0.5)))}));
+  const conf=lines.length?Math.round(lines.reduce((s,l)=>s+l.c,0)/lines.length):0;
+  return{text:lines.map(l=>l.t).join('\n'),conf,words:lines};
  }
 
  async function runOCR(cropped){
-  $('cameraStatus').textContent='Reading label…';
+  const t0=performance.now();
+  const ctx=activeCtx();
   try{
-   // Pass 1: grayscale + contrast, block layout
-   const g=copyCanvas(cropped);grayStretch(g);
-   const r1=await ocrPass(g,Tesseract.PSM.SINGLE_BLOCK);
-   let x=extract(r1.text),text=r1.text,conf=r1.conf;
-
-   // Pass 2 (only if needed): black/white, sparse text
-   if(!x.batch||!x.mfg){
-    $('cameraStatus').textContent='Trying a second read…';
-    const b=copyCanvas(g);otsu(b);
-    const r2=await ocrPass(b,Tesseract.PSM.SPARSE_TEXT);
-    const x2=extract(r2.text);
-    x={batch:x.batch||x2.batch,mfg:x.mfg||x2.mfg,
-       bestBeforeMonths:x.bestBeforeMonths||x2.bestBeforeMonths,expiry:x.expiry||x2.expiry};
-    text=r1.text+'\n--- second read ---\n'+r2.text;
-    conf=Math.max(conf,r2.conf);
+   if(!cvReady&&!cvFail&&cvPromise){
+    $('cameraStatus').textContent='Loading image enhancer…';
+    await Promise.race([cvPromise,sleep(4000)]);
    }
-
-   // Pass 3: dot-joining variants; keep the best-scoring read
-   if(!x.batch||!x.mfg||!BATCH_RE.test(x.batch)){
-    const vs=dotVariants(g);
-    let best=null;
-    for(let i=0;i<vs.length;i++){
-     $('cameraStatus').textContent=`Dot-matrix read ${i+1} of ${vs.length}…`;
-     const r=await ocrPass(vs[i],Tesseract.PSM.SPARSE_TEXT,WL);
-     const xi=extract(r.text);
-     const score=(xi.batch?1:0)+(xi.mfg?1:0)+(BATCH_RE.test(xi.batch)?2:0);
-     text+=`\n--- dot read ${i+1} ---\n`+r.text;
-     if(!best||score>best.score)best={score,x:xi,conf:r.conf};
-     if(score>=4)break;                      // batch fits pattern + MFG found
-    }
-    if(best){
-     const b=BATCH_RE.test(best.x.batch)?best.x.batch:(x.batch||best.x.batch);
-     x={batch:b,mfg:x.mfg||best.x.mfg,
-        bestBeforeMonths:x.bestBeforeMonths||best.x.bestBeforeMonths,
-        expiry:x.expiry||best.x.expiry};
-     conf=Math.max(conf,best.conf);
+   let variants;
+   try{variants=cvReady?cvVariants(cropped):basicVariants(cropped)}catch(e){variants=basicVariants(cropped)}
+   const engines=(paddle?['paddle']:[]).concat(['tesseract']);
+   const reads=[];
+   outer:
+   for(const v of variants){
+    for(const eng of engines){
+     if(reads.length>=MAX_READS)break outer;
+     $('cameraStatus').textContent=`Reading… attempt ${reads.length+1} (${eng}, ${v.name})`;
+     await sleep(0);
+     let r;
+     try{r=eng==='paddle'?await paddleRead(v):await tessRead(v)}catch(e){continue}
+     reads.push({...r,engine:eng,variant:v.name,weight:eng==='paddle'?1.15:1});
+     const f=fuse(reads,ctx);
+     if(reads.length>=2&&f.batch&&f.mfg&&f.batch.conf>=80&&f.mfg.conf>=80)break outer;   // two reads agree
     }
    }
-
-   current={rawText:text,confidence:conf};
-   $('batch').value=x.batch||'';
-   $('mfg').value=x.mfg||'';
-   $('bbMonths').value=x.bestBeforeMonths||'';
-   $('expiry').value=x.expiry||'';
-   $('rawText').value=text;
-   $('ocrConf').textContent=`OCR confidence ${conf}%`;
-   if(!text)setWarn('No text found. Retake with the label block inside the yellow box, in focus.');
-   else if(!x.batch||!x.mfg)setWarn('Batch or MFG date not detected. Enter it from the photo, or Retake.');
-   else if(conf<MIN_CONF)setWarn('Low OCR confidence. Check carefully against the photo.');
-   else setWarn('Check batch letters vs digits (O/0, I/1, S/5, B/8) against the photo.');
-   $('cameraStatus').textContent='Review the fields, then Save or Retake.';
+   const f=fuse(reads,ctx);
+   applyResult(f,reads,Math.round(performance.now()-t0),ctx);
   }catch(e){
-   current={rawText:'',confidence:0};
+   current={orig:{batch:'',mfg:'',exp:'',months:''},conf:{batch:0,mfg:0,exp:0},rawText:'',engine:'',attempts:0,ms:0,template:$('tplSel').value||''};
    setWarn('OCR error: '+e.message+'. Enter fields manually or Retake.');
   }finally{
    $('saveBtn').disabled=!current;
@@ -429,16 +715,45 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
   }
  }
 
+ function applyResult(f,reads,ms,ctx){
+  const o={batch:f.batch?f.batch.value:'',mfg:f.mfg?f.mfg.value:'',exp:f.exp?f.exp.value:'',months:f.months?f.months.value:''};
+  const notes=[];
+  if(!o.months&&ctx.months){o.months=String(ctx.months);notes.push('Best-before months ('+ctx.months+') come from the template, not from the label.')}
+  const conf={batch:f.batch?f.batch.conf:0,mfg:f.mfg?f.mfg.conf:0,exp:f.exp?f.exp.conf:0};
+  const text=reads.map(r=>`--- ${r.engine} / ${r.variant} (${r.conf}%) ---\n${r.text}`).join('\n');
+  current={orig:o,conf,rawText:text,engine:[...new Set(reads.map(r=>r.engine))].join('+'),attempts:reads.length,ms,template:$('tplSel').value||''};
+  $('batch').value=o.batch;$('mfg').value=o.mfg;$('expiry').value=o.exp;$('bbMonths').value=o.months;$('rawText').value=text;
+  clearBadges();
+  setBadge('batch',f.batch,false);setBadge('mfg',f.mfg,false);setBadge('exp',f.exp,true);
+
+  if(f.batch){
+   if(f.batch.fixes.length)notes.push('Batch: changed '+f.batch.fixes.map(x=>x.txt+' (position '+x.pos+')').join(', ')+' to fit the batch format. Confirm against the photo.');
+   if(f.batch.shape==='loose')notes.push('Batch does not match the expected format. Check every character.');
+   if(f.batch.cross==='mismatch')notes.push('Batch year/month letters do not agree with the MFG date. One of them may be misread.');
+   if(f.batch.alts.length)notes.push('Other batch readings: '+f.batch.alts.map(a=>a.value+' ('+a.n+')').join(', '));
+  }else notes.push('Batch not found. Type it from the photo or Retake closer.');
+  if(!f.mfg)notes.push('MFG date not found. Type it from the photo or Retake.');
+  else if(f.mfg.alts.length)notes.push('Other MFG readings: '+f.mfg.alts.map(a=>a.value+' ('+a.n+')').join(', '));
+  if(f.mfg&&!f.exp&&o.months){
+   const tot=f.mfg.info.y*12+(f.mfg.info.m-1)+(+o.months),ey=Math.floor(tot/12),em=tot%12+1;
+   notes.push('No printed expiry. MFG + '+o.months+' months = '+String(em).padStart(2,'0')+'/'+ey+' (some labels print one month earlier, e.g. 08/26 → 07/28). Not filled in automatically.');
+  }
+  $('notes').textContent=notes.join('\n');
+  const flagged=Object.keys(flags).length;
+  $('ocrConf').textContent=reads.length+' read(s) · '+(current.engine||'none')+' · '+ms+' ms';
+  if(!reads.length)setWarn('No text found. Retake with the label block inside the yellow box, in focus.');
+  else setWarn(flagged?'Verify the highlighted fields against the photo.':'Readings agree. Still glance at the photo before saving.');
+  $('cameraStatus').textContent='Review the fields, then Save or Retake.';
+ }
+
  /* ---------- Camera flow ---------- */
  async function startCamera(){
   setMessage('');
   try{
    $('cameraStatus').textContent='Starting camera…';
+   initCV();initPaddle();updateEngineLine();      // load in the background, reused afterwards
    await initOCR();
-   stream=await navigator.mediaDevices.getUserMedia({
-    audio:false,
-    video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}
-   });
+   stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
    try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch{}
    $('video').srcObject=stream;
    await $('video').play();
@@ -449,48 +764,44 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
    $('cameraStatus').textContent='Cannot start camera: '+e.message;
   }
  }
-
  $('startBtn').onclick=()=>{resetCapture();startCamera()};
-
  $('captureBtn').onclick=async()=>{
   const v=$('video');
   if(state!=='live'||v.readyState<2)return;
   const c=cropGuide();
   $('preview').src=c.toDataURL('image/jpeg',0.92);
-  stopStream();                 // camera off: captured area is frozen for review
+  stopStream();
   setState('captured');
-  $('saveBtn').disabled=true;
-  $('retakeBtn').disabled=true;
+  $('saveBtn').disabled=true;$('retakeBtn').disabled=true;
   await runOCR(c);
  };
-
- $('cancelBtn').onclick=()=>{
-  stopStream();setState('idle');resetCapture();
-  $('cameraStatus').textContent='Camera stopped. Nothing captured.';
- };
-
+ $('cancelBtn').onclick=()=>{stopStream();setState('idle');resetCapture();$('cameraStatus').textContent='Camera stopped. Nothing captured.'};
  $('retakeBtn').onclick=()=>{resetCapture();startCamera()};
 
  $('saveBtn').onclick=()=>{
   if(state!=='captured')return;
-  const batch=val('batch'),mfg=val('mfg'),rawText=val('rawText');
+  const batch=val('batch'),mfg=val('mfg'),expiry=val('expiry'),months=val('bbMonths'),rawText=val('rawText');
   if(!batch&&!mfg&&!rawText){setMessage('Nothing to save. Retake the label.',true);return}
-  const conf=current?.confidence??0;
-  const now=new Date();
-  const r=getRecords();
-  r.push({
+  const unresolved=Object.keys(flags).filter(k=>!verified[k]);
+  if(REQUIRE_CONFIRM&&unresolved.length){setMessage('Confirm or correct the highlighted field(s): '+unresolved.join(', ')+'.',true);return}
+  const o=(current&&current.orig)||{batch:'',mfg:'',exp:'',months:''};
+  const cf=(current&&current.conf)||{batch:0,mfg:0,exp:0};
+  const now=new Date(),r=getRecords();
+  const rec={
    scanId:crypto.randomUUID?crypto.randomUUID():String(now.getTime())+'-'+Math.random().toString(16).slice(2),
-   scanDateTime:now.toISOString(),
-   deviceId:'android-chrome',
-   sku:val('sku'),batch,mfg,
-   bestBeforeMonths:val('bbMonths'),
-   expiry:val('expiry'),
-   ocrConfidence:conf,
-   ocrStatus:(batch&&mfg&&conf>=MIN_CONF)?'REVIEWED':'NEEDS_REVIEW',
-   rawText,
-   uploaded:false
-  });
-  setRecords(r);
+   scanDateTime:now.toISOString(),deviceId:'android-chrome',
+   sku:val('sku'),batch,mfg,bestBeforeMonths:months,expiry,
+   ocrConfidence:Math.max(cf.batch,cf.mfg),
+   ocrStatus:(batch&&mfg&&!unresolved.length)?'REVIEWED':'NEEDS_REVIEW',
+   rawText:rawText.slice(0,1500),uploaded:false,
+   template:(current&&current.template)||'',
+   ocrOriginal:{batch:o.batch,mfg:o.mfg,exp:o.exp,months:o.months,engine:current?current.engine:'',attempts:current?current.attempts:0,ms:current?current.ms:0},
+   confidence:cf,
+   verified:{batch:!!verified.batch,mfg:!!verified.mfg,exp:!!verified.exp},
+   edited:{batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
+  };
+  r.push(rec);
+  if(!setRecords(r)){r.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
   sessionSaved++;
   resetCapture();setState('idle');updateCounts();
   setMessage('Saved. Tap Start camera for the next label.');
@@ -501,18 +812,14 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
  $('saveUrlBtn').onclick=()=>{
   const u=val('endpoint');
   if(!u.startsWith('https://script.google.com/')){setMessage('Enter a valid Apps Script /exec URL.',true);return}
-  localStorage.setItem(URL_KEY,u);
-  setMessage('Upload URL saved on this device.');
-  updateCounts();
+  localStorage.setItem(URL_KEY,u);setMessage('Upload URL saved on this device.');updateCounts();
  };
-
  $('syncBtn').onclick=async()=>{
   const url=endpoint();
   if(!url){setMessage('Save your Apps Script URL first.',true);return}
   const records=getRecords(),pending=records.filter(x=>!x.uploaded);
   if(!pending.length){setMessage('No pending records.');return}
-  $('syncBtn').disabled=true;
-  let sent=0;
+  $('syncBtn').disabled=true;let sent=0;
   try{
    for(let i=0;i<pending.length;i+=100){
     const chunk=pending.slice(i,i+100);
@@ -521,31 +828,32 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
     if(!res.ok||!data.ok)throw new Error(data.error||'Upload failed');
     const ids=new Set(chunk.map(x=>x.scanId));
     records.forEach(x=>{if(ids.has(x.scanId))x.uploaded=true});
-    setRecords(records);
-    sent+=chunk.length;
+    setRecords(records);sent+=chunk.length;
     setMessage(`Uploading… ${sent} of ${pending.length}`);
    }
-   setMessage(`Successfully uploaded ${sent} records.`);
-   updateCounts();
+   setMessage(`Successfully uploaded ${sent} records.`);updateCounts();
   }catch(e){
-   setMessage('Sync interrupted: '+e.message+'. Unsent records remain on this phone.',true);
-   updateCounts();
-  }finally{
-   $('syncBtn').disabled=false;
-  }
+   setMessage('Sync interrupted: '+e.message+'. Unsent records remain on this phone.',true);updateCounts();
+  }finally{$('syncBtn').disabled=false}
  };
-
  $('exportBtn').onclick=()=>{
-  const rows=getRecords();
-  const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded'];
-  const csv=[cols.join(','),...rows.map(r=>cols.map(k=>'"'+String(r[k]??'').replace(/"/g,'""')+'"').join(','))].join('\r\n');
+  const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded',
+   'template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
+  const flat=r=>{const o=r.ocrOriginal||{},c=r.confidence||{},e=r.edited||{};
+   return{...r,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
+    confBatch:c.batch,confMfg:c.mfg,confExp:c.exp,editedBatch:e.batch,editedMfg:e.mfg,editedExp:e.exp,engine:o.engine,attempts:o.attempts,ms:o.ms}};
+  const rows=getRecords().map(flat);
+  const csv=[cols.join(','),...rows.map(r=>cols.map(k=>'"'+String(r[k]==null?'':r[k]).replace(/"/g,'""')+'"').join(','))].join('\r\n');
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-  a.download='batch_scans.csv';a.click();
-  URL.revokeObjectURL(a.href);
+  a.download='batch_scans.csv';a.click();URL.revokeObjectURL(a.href);
  };
 
+ /* ---------- Init ---------- */
  $('endpoint').value=endpoint();
+ let act='';try{act=localStorage.getItem(TPL_ACTIVE)||''}catch(e){}
+ refreshTplSelect(act);loadTpl($('tplSel').value);
+ updateEngineLine();
  setState('idle');
  updateCounts();
  if('serviceWorker' in navigator && location.protocol.startsWith('http'))
