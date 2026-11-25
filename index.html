@@ -342,7 +342,7 @@ function fuse(reads,ctx,now){
  const MAX_READS=6;            // max OCR attempts per label
  const REQUIRE_CONFIRM=false;  // true = Save is blocked until every yellow/red field is edited or its badge tapped
  // PaddleOCR (ONNX) adapter. OFF by default and UNTESTED here: needs model files in your repo and the library API may differ.
- const PADDLE_CFG={enabled:false,lib:'https://esm.sh/@gutenye/ocr-browser',
+ const PADDLE_CFG={enabled:true,lib:'https://esm.sh/@gutenye/ocr-browser',
   models:{detectionPath:'models/ch_PP-OCRv4_det_infer.onnx',recognitionPath:'models/ch_PP-OCRv4_rec_infer.onnx',dictionaryPath:'models/ppocr_keys_v1.txt'}};
  const WL='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/.,:- ';
  let worker=null,stream=null,state='idle',current=null,sessionSaved=0;
