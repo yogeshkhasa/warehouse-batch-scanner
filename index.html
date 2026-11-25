@@ -134,7 +134,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Prototype v0.5 · OpenCV enhance · multi-read validation · Verify every field before saving</footer>
+<footer>Prototype v0.6 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -143,14 +143,14 @@ details.card summary{font-weight:700;cursor:pointer}
 /* ==== PURE:START (no DOM access; unit-testable) ==== */
 const MON={JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12};
 // Look-alike maps. They are only used when a character VIOLATES the expected pattern at its position.
-const L2D={O:'0',Q:'0',D:'0',I:'1',L:'1',Z:'2',S:'5',G:'6',B:'8',A:'4',T:'7'};
+const L2D={O:['0'],Q:['0'],D:['0'],I:['1'],L:['1'],Z:['2'],S:['5','6'],G:['6'],B:['8'],A:['4'],T:['7'],E:['6']};
 const D2L={'0':['O','D'],'1':['I','L'],'2':['Z'],'4':['A'],'5':['S'],'6':['G'],'7':['T'],'8':['B']};
 const MASK_TEST={L:c=>/[A-Z]/.test(c),D:c=>/[0-9]/.test(c),X:c=>/[A-Z0-9]/.test(c),M:c=>/[A-L]/.test(c),Y:c=>/[0-9]/.test(c)};
 const DEFAULT_MASKS=['LLLYMDDD','LLYMDDD'];
 const pad2=n=>String(n).padStart(2,'0');
 const yearOk=(y,now)=>{const cy=(now||new Date()).getFullYear();return y>=cy-3&&y<=cy+7};
 const calOk=(y,m,d)=>{if(!(m>=1&&m<=12))return false;if(d==null)return true;const t=new Date(y,m-1,d);return t.getFullYear()===y&&t.getMonth()===m-1&&t.getDate()===d};
-const fixDigits=s=>{let fixed=false;const v=s.replace(/[OQDILSBZ]/g,ch=>{fixed=true;return L2D[ch]});return{v,fixed}};
+const fixDigits=s=>{let fixed=false;const v=s.replace(/[OQDILSBZ]/g,ch=>{fixed=true;return L2D[ch][0]});return{v,fixed}};
 
 function findDates(text,fmt,now){
  const t=(text||'').toUpperCase(),C='[0-9OQDILSBZ]',out=[],spans=[];
@@ -182,6 +182,14 @@ function findDates(text,fmt,now){
  if(fmt==='auto'||fmt==='MON.YY'){
   const re=/(?<![A-Z])(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\.?\s*[\/\-,]?\s*(\d{2}|\d{4})(?!\d)/g;
   while((m=re.exec(t)))push(m.index,toY(m[2]),MON[m[1]],null,false);
+ }
+ if(fmt==='auto'||fmt==='MM/YY'){   // dot-matrix slash misread as 7/1 right after a date label: "07728" -> 07/28
+  const re=/(?:BEFORE|EXP|MFG|MFD|DATE)[^0-9A-Z]{0,6}(0[1-9]|1[0-2])[71](\d{2})(?![0-9])/g;
+  while((m=re.exec(t))){const n=out.length;push(m.index+m[0].indexOf(m[1]),toY(m[2]),+m[1],null,true);if(out.length>n&&out.slice(0,n).some(d=>d.value===out[n].value))out.pop()}
+ }
+ if(!out.length&&(fmt==='auto'||fmt==='MM/YY')){
+  const re=/(?<![0-9.])(0[1-9]|1[0-2])(\d{2})(?![0-9])/g;
+  while((m=re.exec(t)))push(m.index,toY(m[2]),+m[1],null,true);   // flagged as corrected -> lower confidence
  }
  return out;
 }
@@ -221,7 +229,7 @@ function fixBatchToken(tok,masks,mfg){
    else{
     const alts=[];
     if(mc==='L'||mc==='M')(D2L[c]||[]).forEach(x=>{if(test(x))alts.push({c:x,fix:`${c}→${x}`})});
-    else if((mc==='D'||mc==='Y')&&L2D[c])alts.push({c:L2D[c],fix:`${c}→${L2D[c]}`});
+    else if((mc==='D'||mc==='Y')&&L2D[c])L2D[c].forEach(x=>alts.push({c:x,fix:`${c}→${x}`}));
     if(!alts.length){ok=false;break}
     opts=alts;
    }
@@ -261,7 +269,7 @@ function pickBatch(text,masks,mfg){
  if(strict)return{value:strict.value,raw:strict.raw,fixes:strict.fixes,mask:strict.mask,validity:strict.fixes.length?0.85:1,shape:'ok'};
  for(const t of toks){
   if(!bt.direct.has(t))continue;
-  if(t.length>=6&&t.length<=10&&(t.match(/[0-9]/g)||[]).length>=2&&(t.match(/[A-Z]/g)||[]).length>=2)
+  if(t.length>=6&&t.length<=10&&(t.match(/[0-9]/g)||[]).length>=3&&(t.match(/[A-Z]/g)||[]).length>=2&&!/MONTH|BEFORE|MANUF|CONTENT|TAXES|SUNSCREEN|WASH/.test(t))
    return{value:t,raw:t,fixes:[],mask:null,validity:0.35,shape:'loose'};
  }
  return null;
@@ -337,12 +345,12 @@ function fuse(reads,ctx,now){
  const DB_KEY='wbs_records_v1',URL_KEY='wbs_endpoint_v1',TPL_KEY='wbs_templates_v1',TPL_ACTIVE='wbs_tpl_active_v1';
  const FIELDS=['sku','batch','mfg','bbMonths','expiry','rawText'];
  const FIELD_MAP={batch:'batch',mfg:'mfg',exp:'expiry'};
- // Self-host opencv.js in your repo (put the file next to index.html and set this to 'opencv.js') for reliability/offline use.
- const OPENCV_URL='https://docs.opencv.org/4.x/opencv.js';
+ // opencv.js is self-hosted: put the provided opencv.js file next to index.html in your repo.
+ const OPENCV_URL='opencv.js';
  const MAX_READS=6;            // max OCR attempts per label
  const REQUIRE_CONFIRM=false;  // true = Save is blocked until every yellow/red field is edited or its badge tapped
- // PaddleOCR (ONNX) adapter. OFF by default and UNTESTED here: needs model files in your repo and the library API may differ.
- const PADDLE_CFG={enabled:true,lib:'https://esm.sh/@gutenye/ocr-browser',
+ // PaddleOCR (ONNX) adapter. Set enabled:false to run Tesseract only.
+ const PADDLE_CFG={enabled:true,lib:'paddle-ocr.js',   // self-hosted bundle (paddle-ocr.js + ort/ folder + models/ folder in the repo)
   models:{detectionPath:'models/ch_PP-OCRv4_det_infer.onnx',recognitionPath:'models/ch_PP-OCRv4_rec_infer.onnx',dictionaryPath:'models/ppocr_keys_v1.txt'}};
  const WL='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/.,:- ';
  let worker=null,stream=null,state='idle',current=null,sessionSaved=0;
@@ -593,8 +601,19 @@ function fuse(reads,ctx,now){
   cvPromise=(async()=>{
    try{
     if(!(window.cv&&window.cv.Mat))await loadScript(OPENCV_URL,90000);
-    const t0=Date.now();
-    while(!(window.cv&&window.cv.Mat)){if(Date.now()-t0>90000)throw new Error('init timeout');await sleep(150)}
+    const c=window.cv;
+    if(c&&!c.Mat&&typeof c.then==='function'){
+     // Current OpenCV.js builds expose a promise-like object. Resolve it WITHOUT returning it from the
+     // callback (returning it would loop forever because it is itself "thenable").
+     await new Promise((res,rej)=>{
+      const t=setTimeout(()=>rej(new Error('init timeout')),90000);
+      c.then(m=>{clearTimeout(t);window.cv=m;res()});
+     });
+    }else{
+     const t0=Date.now();
+     while(!(window.cv&&window.cv.Mat)){if(Date.now()-t0>90000)throw new Error('init timeout');await sleep(150)}
+    }
+    if(!(window.cv&&window.cv.Mat&&window.cv.CLAHE))throw new Error('OpenCV missing functions');
     cvReady=true;
    }catch(e){cvFail=true}
    updateEngineLine();return cvReady;
@@ -655,13 +674,18 @@ function fuse(reads,ctx,now){
   }});
   $('ocrState').textContent='OCR ready';
  }
- async function initPaddle(){
-  if(!PADDLE_CFG.enabled||paddle)return !!paddle;
-  try{
-   const mod=await import(PADDLE_CFG.lib),Ocr=mod.default||mod.Ocr;
-   paddle=await Ocr.create({models:PADDLE_CFG.models});
-  }catch(e){paddleErr=String(e.message||e).slice(0,60)}
-  updateEngineLine();return !!paddle;
+ let paddlePromise=null;
+ function initPaddle(){
+  if(!PADDLE_CFG.enabled)return Promise.resolve(false);
+  if(paddlePromise)return paddlePromise;
+  paddlePromise=(async()=>{
+   try{
+    const mod=await import(new URL(PADDLE_CFG.lib,location.href).href),Ocr=mod.default||mod.Ocr;
+    paddle=await Ocr.create({models:PADDLE_CFG.models});
+   }catch(e){paddleErr=String(e.message||e).slice(0,70)}
+   updateEngineLine();return !!paddle;
+  })();
+  return paddlePromise;
  }
  async function tessRead(v){
   const block=v.mode==='block';
@@ -674,8 +698,8 @@ function fuse(reads,ctx,now){
  }
  async function paddleRead(v){
   const res=await paddle.detect(v.canvas.toDataURL('image/png'));
-  const lines=(Array.isArray(res)?res:(res&&res.lines)||[]).map(l=>({t:l.text||'',c:Math.round(100*(l.mean!=null?l.mean:(l.score!=null?l.score:0.5)))}));
-  const conf=lines.length?Math.round(lines.reduce((s,l)=>s+l.c,0)/lines.length):0;
+  const lines=((res&&res.texts)||[]).map(l=>({t:l.text||'',c:Math.round(100*(l.mean||0))}));
+  const conf=lines.length?Math.round(lines.reduce((a,l)=>a+l.c,0)/lines.length):0;
   return{text:lines.map(l=>l.t).join('\n'),conf,words:lines};
  }
 
@@ -687,13 +711,18 @@ function fuse(reads,ctx,now){
     $('cameraStatus').textContent='Loading image enhancer…';
     await Promise.race([cvPromise,sleep(4000)]);
    }
+   if(PADDLE_CFG.enabled&&!paddle&&!paddleErr&&paddlePromise){
+    $('cameraStatus').textContent='Loading PaddleOCR…';
+    await Promise.race([paddlePromise,sleep(8000)]);
+   }
    let variants;
    try{variants=cvReady?cvVariants(cropped):basicVariants(cropped)}catch(e){variants=basicVariants(cropped)}
-   const engines=(paddle?['paddle']:[]).concat(['tesseract']);
+   if(paddle)variants.unshift({name:'original',canvas:copyCanvas(cropped),mode:'color',engines:['paddle']});   // Paddle reads the natural-colour crop once
    const reads=[];
    outer:
    for(const v of variants){
-    for(const eng of engines){
+    const engs=(v.engines||['tesseract']).filter(e=>e!=='paddle'||paddle);
+    for(const eng of engs){
      if(reads.length>=MAX_READS)break outer;
      $('cameraStatus').textContent=`Reading… attempt ${reads.length+1} (${eng}, ${v.name})`;
      await sleep(0);
