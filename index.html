@@ -37,6 +37,9 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 input.f-chk{border-color:#e0a100;background:#fffaf0}input.f-bad{border-color:#c0392b;background:#fff5f4}
 #skuChip{position:absolute;left:8px;right:8px;top:8px;z-index:3;padding:5px 8px;border-radius:8px;background:rgba(0,0,0,.68);color:#fff;font-size:13px;font-weight:700;text-align:center;pointer-events:none}
 #skuChip.ok{background:rgba(22,115,58,.92)}
+label.chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px}
+label.chk input{width:auto;margin:0}
+#operator{flex:1}
 #notes{font-size:12px;color:#5a4a1f;margin-top:8px;white-space:pre-wrap}
 .hint{font-size:11px;color:#64756c;margin:3px 0 0}
 details.card summary{font-weight:700;cursor:pointer}
@@ -49,6 +52,13 @@ details.card summary{font-weight:700;cursor:pointer}
 
 <section class="card">
  <div class="row spread"><strong>1. Capture one label</strong><span class="pill" id="ocrState">OCR not started</span></div>
+ <label for="operator">Scanned by</label>
+ <div class="row" style="flex-wrap:nowrap"><select id="operator"></select><button id="opAdd" class="secondary" style="flex:none">+ Add name</button></div>
+ <div id="opAddRow" class="row hidden" style="flex-wrap:nowrap;margin-top:6px">
+  <input id="opNew" placeholder="Full name" maxlength="40" autocapitalize="words">
+  <button id="opSave" style="flex:none">Add</button><button id="opCancel" class="secondary" style="flex:none">Cancel</button>
+ </div>
+ <label class="chk"><input type="checkbox" id="soundOn" checked> Beep and vibrate on barcode / capture</label>
  <div id="camwrap" class="camwrap hidden">
   <video id="video" playsinline muted></video>
   <div id="skuChip">Barcode reader loading…</div>
@@ -80,6 +90,8 @@ details.card summary{font-weight:700;cursor:pointer}
  <label for="sku">SKU (from barcode)<span class="cb" id="cb_sku"></span></label>
  <input id="sku" placeholder="Read from barcode, or type it" disabled>
  <div class="hint" id="skuNote"></div>
+ <label for="qty">Quantity (units) – required<span class="cb" id="cb_qty"></span></label>
+ <input id="qty" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="Number of units" maxlength="5" disabled>
  <div class="grid">
   <div><label for="batch">Batch / Lot No.<span class="cb" id="cb_batch"></span></label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
   <div><label for="mfg">MFG date<span class="cb" id="cb_mfg"></span></label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
@@ -104,8 +116,12 @@ details.card summary{font-weight:700;cursor:pointer}
  <div class="row" style="margin-top:8px">
   <button id="saveUrlBtn" class="secondary">Save URL</button><button id="syncBtn">Sync queued records</button>
  </div>
+ <label for="devLabel">This device's name (optional, e.g. Counter-1)</label>
+ <input id="devLabel" placeholder="Counter-1" maxlength="30">
+ <small>Device ID: <b id="devId"></b> – generated once per phone, so scans from different phones can be told apart.</small>
+ <p class="status" id="syncStatus"></p>
  <p class="status">Queued locally: <b id="pendingCount">0</b> · Saved this session: <b id="savedCount">0</b></p>
- <small>Records stay on this phone until successfully uploaded. Use the same Chrome profile to access the local queue.</small>
+ <small>Records upload automatically when the phone is online, and stay on this phone until they succeed. Use the same Chrome profile to access the local queue.</small>
 </section>
 
 <section class="card">
@@ -141,7 +157,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Khasa Prototype v0.7.1 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
+<footer>Khasa Prototype v0.8 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -397,7 +413,7 @@ function pickCode(codes){
 
  const $=id=>document.getElementById(id);
  const DB_KEY='wbs_records_v1',URL_KEY='wbs_endpoint_v1',TPL_KEY='wbs_templates_v1',TPL_ACTIVE='wbs_tpl_active_v1';
- const FIELDS=['sku','batch','mfg','bbMonths','expiry','rawText'];
+ const FIELDS=['sku','qty','batch','mfg','bbMonths','expiry','rawText'];
  const FIELD_MAP={batch:'batch',mfg:'mfg',exp:'expiry'};
  // opencv.js is self-hosted: put the provided opencv.js file next to index.html in your repo.
  const OPENCV_URL='opencv.js';
@@ -419,14 +435,108 @@ function pickCode(codes){
  const NATIVE_BACK=Object.fromEntries(Object.entries(NATIVE_FMT).map(([k,v])=>[v,k]));
  let bcPromise=null,bcZX=null,bcNative=null,bcErr='',live={sku:'',fmt:'',t:0,tpl:''},liveTimer=null,skuInfo={code:'',fmt:'',src:''};
 
- const getRecords=()=>{try{return JSON.parse(localStorage.getItem(DB_KEY)||'[]')}catch{return []}};
- const setRecords=r=>{try{localStorage.setItem(DB_KEY,JSON.stringify(r));return true}catch(e){return false}};
+ const DEV_KEY='wbs_device_v1',DEVLABEL_KEY='wbs_devlabel_v1',OP_KEY='wbs_operators_v1',OPSEL_KEY='wbs_operator_v1',OPPEND_KEY='wbs_op_push_v1',SND_KEY='wbs_sound_v1';
+ const QTY_MAX=99999,PRUNE_DAYS=7,SHEET_RAW_MAX=500,SYNC_EVERY_MS=60000,OPS_REFRESH_MS=600000;
+
+ /* ---------- Records: IndexedDB (no practical size limit) with localStorage fallback ---------- */
+ // RECS is the in-memory copy used by the whole page; every change is written through to IndexedDB one record at a time.
+ let RECS=[];const IDB={db:null,ok:false};
+ const getRecords=()=>RECS;
+ function idbOpen(){return new Promise(res=>{
+  try{
+   const rq=indexedDB.open('wbs_v1',1);
+   rq.onupgradeneeded=()=>{rq.result.createObjectStore('records',{keyPath:'scanId'})};
+   rq.onsuccess=()=>{IDB.db=rq.result;IDB.ok=true;res(true)};
+   rq.onerror=rq.onblocked=()=>res(false);
+  }catch(e){res(false)}
+ })}
+ const idbTx=(mode,fn)=>new Promise(res=>{
+  if(!IDB.ok)return res(false);
+  try{const tx=IDB.db.transaction('records',mode);fn(tx.objectStore('records'));tx.oncomplete=()=>res(true);tx.onerror=tx.onabort=()=>res(false)}catch(e){res(false)}
+ });
+ const idbAll=()=>new Promise(res=>{
+  if(!IDB.ok)return res(null);
+  try{const rq=IDB.db.transaction('records','readonly').objectStore('records').getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res(null)}catch(e){res(null)}
+ });
+ async function persistRecords(list){
+  if(IDB.ok)return idbTx('readwrite',st=>list.forEach(r=>st.put(r)));
+  try{localStorage.setItem(DB_KEY,JSON.stringify(RECS));return true}catch(e){return false}
+ }
+ async function loadRecords(){
+  await idbOpen();
+  let legacy=[];try{legacy=JSON.parse(localStorage.getItem(DB_KEY)||'[]')}catch(e){}
+  if(IDB.ok){
+   const all=(await idbAll())||[];
+   const have=new Set(all.map(r=>r.scanId));
+   const mig=legacy.filter(r=>r&&r.scanId&&!have.has(r.scanId));
+   if(mig.length){if(await idbTx('readwrite',st=>mig.forEach(r=>st.put(r))))all.push(...mig)}
+   if(legacy.length&&mig.every(r=>all.some(x=>x.scanId===r.scanId))){try{localStorage.removeItem(DB_KEY)}catch(e){}}   // moved: free the old localStorage space
+   RECS=all;
+  }else RECS=legacy;
+  RECS.sort((a,b)=>String(a.scanDateTime).localeCompare(String(b.scanDateTime)));
+  // keep the phone light: uploaded records older than PRUNE_DAYS are dropped here (they are in the Sheet)
+  const cut=Date.now()-PRUNE_DAYS*86400000,old=RECS.filter(r=>r.uploaded&&Date.parse(r.scanDateTime)<cut);
+  if(old.length){RECS=RECS.filter(r=>!old.includes(r));if(IDB.ok)await idbTx('readwrite',st=>old.forEach(r=>st.delete(r.scanId)))}
+ }
+ function deviceId(){
+  let d='';try{d=localStorage.getItem(DEV_KEY)||''}catch(e){}
+  if(!d){
+   const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',u=new Uint8Array(4);
+   (window.crypto||{getRandomValues:a=>a.forEach((_,i)=>a[i]=Math.random()*256)}).getRandomValues(u);
+   d='D-'+[...u].map(x=>A[x%A.length]).join('');
+   try{localStorage.setItem(DEV_KEY,d)}catch(e){}
+  }
+  return d;
+ }
+ const devLabel=()=>{try{return localStorage.getItem(DEVLABEL_KEY)||''}catch(e){return ''}};
  const endpoint=()=>localStorage.getItem(URL_KEY)||'';
  const val=id=>$(id).value.trim();
  const setMessage=(s,err=false)=>{$('message').textContent=s;$('message').style.color=err?'#a33':'#176b50'};
  const setWarn=s=>{$('warn').textContent=s};
  const nz=s=>String(s==null?'':s).trim().toUpperCase().replace(/\s+/g,'');
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+ /* ---------- Beep / vibrate (Web Audio, no files) ---------- */
+ let actx=null;
+ const soundOn=()=>$('soundOn').checked;
+ function audioUnlock(){try{if(!actx){const AC=window.AudioContext||window.webkitAudioContext;if(AC)actx=new AC()}if(actx&&actx.state==='suspended')actx.resume()}catch(e){}}
+ function tone(f,t0,dur,vol){
+  const o=actx.createOscillator(),g=actx.createGain();
+  o.type='square';o.frequency.value=f;
+  g.gain.setValueAtTime(0.0001,t0);g.gain.exponentialRampToValueAtTime(vol,t0+0.006);g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  o.connect(g);g.connect(actx.destination);o.start(t0);o.stop(t0+dur+0.02);
+ }
+ // kinds: lock = barcode read (one short high beep) · capture = Capture tapped (low double beep) · ready = OCR result shown (soft rising chirp)
+ function beep(kind){
+  if(!soundOn())return;
+  try{
+   audioUnlock();
+   if(actx){const t=actx.currentTime+0.01;
+    if(kind==='lock')tone(1800,t,0.11,0.35);
+    else if(kind==='capture'){tone(900,t,0.07,0.35);tone(650,t+0.11,0.09,0.35)}
+    else if(kind==='ready'){tone(1200,t,0.07,0.18);tone(1600,t+0.09,0.09,0.18)}
+   }
+   if(navigator.vibrate)navigator.vibrate(kind==='lock'?[60]:(kind==='capture'?[40,40,40]:[25]));
+  }catch(e){}
+ }
+
+ /* ---------- Scanner names (picker) ---------- */
+ const OPS=()=>{try{return JSON.parse(localStorage.getItem(OP_KEY)||'[]')}catch(e){return []}};
+ const setOps=a=>{try{localStorage.setItem(OP_KEY,JSON.stringify(a))}catch(e){}};
+ const cleanName=x=>String(x||'').replace(/\s+/g,' ').trim().slice(0,40);
+ const operatorName=()=>$('operator').value||'';
+ function renderOps(sel){
+  const a=OPS().slice().sort((x,y)=>x.localeCompare(y,undefined,{sensitivity:'base'})),el=$('operator');
+  el.innerHTML='';el.add(new Option('(select your name)',''));a.forEach(n=>el.add(new Option(n,n)));
+  el.value=a.includes(sel)?sel:'';
+ }
+ function mergeOps(names){
+  const a=OPS(),low=new Set(a.map(x=>x.toLowerCase()));let ch=false;
+  (names||[]).map(cleanName).filter(Boolean).forEach(n=>{if(!low.has(n.toLowerCase())){a.push(n);low.add(n.toLowerCase());ch=true}});
+  if(ch){setOps(a);renderOps(operatorName())}
+ }
+ const opPending=()=>{try{return JSON.parse(localStorage.getItem(OPPEND_KEY)||'[]')}catch(e){return []}};
+ const setOpPending=a=>{try{localStorage.setItem(OPPEND_KEY,JSON.stringify(a))}catch(e){}};
 
  /* ---------- UI state ---------- */
  // Capture stays locked until a barcode has been read (or the person taps "No barcode – skip").
@@ -457,7 +567,7 @@ function pickCode(codes){
  function resetCapture(){
   current=null;skuInfo={code:'',fmt:'',src:''};expiryAuto=false;
   FIELDS.forEach(id=>$(id).value='');
-  $('cb_sku').className='cb';$('cb_sku').textContent='';$('skuNote').textContent='';$('sku').classList.remove('f-chk','f-bad');
+  $('cb_sku').className='cb';$('cb_sku').textContent='';$('skuNote').textContent='';$('sku').classList.remove('f-chk','f-bad');$('qty').classList.remove('f-bad');
   $('preview').removeAttribute('src');
   $('ocrConf').textContent='';
   setWarn('');clearBadges();
@@ -586,7 +696,7 @@ function pickCode(codes){
   else r.slice(-5).reverse().forEach(x=>{
    const d=document.createElement('div');
    d.style.cssText='padding:7px 0;border-bottom:1px solid #edf1ee;font-size:13px';
-   d.textContent=`${x.batch||'(no batch)'} · MFG ${x.mfg||'?'} · BB ${x.bestBeforeMonths||'?'} mo · ${x.uploaded?'Uploaded':'Pending'}`;
+   d.textContent=`${x.batch||'(no batch)'} · Qty ${x.qty==null?'?':x.qty} · MFG ${x.mfg||'?'} · ${x.scannedBy||'?'} · ${x.uploaded?'Uploaded':'Pending'}`;
    $('recent').appendChild(d);
   });
   renderAccuracy();
@@ -860,7 +970,8 @@ function pickCode(codes){
   $('ocrConf').textContent=reads.length+' read(s) · '+(current.engine||'none')+' · '+ms+' ms';
   if(!reads.length)setWarn('No text found. Retake with the label block inside the yellow box, in focus.');
   else setWarn(flagged?'Verify the highlighted fields against the photo.':'Readings agree. Still glance at the photo before saving.');
-  $('cameraStatus').textContent='Review the fields, then Save or Retake.';
+  $('cameraStatus').textContent='Review the fields, enter the quantity, then Save or Retake.';
+  beep('ready');
  }
 
  /* ---------- Barcode / SKU ---------- */
@@ -942,7 +1053,7 @@ function pickCode(codes){
     if(hit){
      const changed=hit.text!==live.sku;
      live={sku:hit.text,fmt:hit.format,t:Date.now(),tpl:live.tpl};
-     if(changed)live.tpl=autoTemplate(hit.text);
+     if(changed){live.tpl=autoTemplate(hit.text);beep('lock')}
      showChip();updateGate();
     }else if(!SKU_FIRST&&live.sku&&Date.now()-live.t>BC.maxAgeMs){live={sku:'',fmt:'',t:0,tpl:''};showChip()}
    }
@@ -988,8 +1099,12 @@ function pickCode(codes){
    $('cameraStatus').textContent='Cannot start camera: '+e.message;
   }
  }
- $('startBtn').onclick=()=>{resetCapture();startCamera()};
+ $('startBtn').onclick=()=>{
+  if(!operatorName()){setMessage('Select your name under "Scanned by" first (tap + Add name if it is not in the list).',true);$('operator').focus();return}
+  audioUnlock();resetCapture();startCamera();
+ };
  $('captureBtn').onclick=async()=>{
+  beep('capture');
   const v=$('video');
   if(state!=='live'||v.readyState<2)return;
   const c=cropGuide();
@@ -1006,22 +1121,30 @@ function pickCode(codes){
  $('cancelBtn').onclick=()=>{stopStream();setState('idle');resetCapture();$('cameraStatus').textContent='Camera stopped. Nothing captured.'};
  $('retakeBtn').onclick=()=>{resetCapture();startCamera()};
 
- $('saveBtn').onclick=()=>{
-  if(state!=='captured')return;
+ let saving=false;
+ $('saveBtn').onclick=async()=>{
+  if(state!=='captured'||saving)return;
   const batch=val('batch'),mfg=val('mfg'),expiry=val('expiry'),months=val('bbMonths'),rawText=val('rawText');
   if(!batch&&!mfg&&!rawText){setMessage('Nothing to save. Retake the label.',true);return}
+  if(!operatorName()){setMessage('Select your name under "Scanned by" before saving.',true);return}
+  const qty=/^\d+$/.test(val('qty'))?parseInt(val('qty'),10):0;
+  if(!(qty>=1&&qty<=QTY_MAX)){
+   $('qty').classList.add('f-bad');$('qty').focus();
+   setMessage('Enter the quantity (whole number of units, 1 to '+QTY_MAX+') before saving.',true);return;
+  }
+  $('qty').classList.remove('f-bad');
   const unresolved=Object.keys(flags).filter(k=>!verified[k]);
   if(REQUIRE_CONFIRM&&unresolved.length){setMessage('Confirm or correct the highlighted field(s): '+unresolved.join(', ')+'.',true);return}
   const o=(current&&current.orig)||{batch:'',mfg:'',exp:'',months:''};
   const cf=(current&&current.conf)||{batch:0,mfg:0,exp:0};
-  const now=new Date(),r=getRecords();
+  const now=new Date();
   const rec={
    scanId:crypto.randomUUID?crypto.randomUUID():String(now.getTime())+'-'+Math.random().toString(16).slice(2),
-   scanDateTime:now.toISOString(),deviceId:'android-chrome',
+   scanDateTime:now.toISOString(),deviceId:deviceId(),deviceLabel:devLabel(),scannedBy:operatorName(),qty,
    sku:val('sku'),skuScanned:{code:skuInfo.code,format:skuInfo.fmt,source:skuInfo.src},batch,mfg,bestBeforeMonths:months,expiry,
    ocrConfidence:Math.max(cf.batch,cf.mfg),
    ocrStatus:(batch&&mfg&&!unresolved.length)?'REVIEWED':'NEEDS_REVIEW',
-   rawText:rawText.slice(0,1500),uploaded:false,
+   rawText:rawText.slice(0,3000),uploaded:false,
    template:(current&&current.template)||'',
    ocrOriginal:{batch:o.batch,mfg:o.mfg,exp:o.exp,months:o.months,engine:current?current.engine:'',attempts:current?current.attempts:0,ms:current?current.ms:0},
    confidence:cf,
@@ -1029,45 +1152,82 @@ function pickCode(codes){
    expiryCalculated:expiryAuto,
    edited:{sku:nz(val('sku'))!==nz(skuInfo.code),batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:expiryAuto?false:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
   };
-  r.push(rec);
-  if(!setRecords(r)){r.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
-  sessionSaved++;
-  resetCapture();setState('idle');updateCounts();
-  setMessage('Saved. Tap Start camera for the next label.');
-  $('cameraStatus').textContent='Ready for the next label.';
+  saving=true;
+  try{
+   RECS.push(rec);
+   if(!(await persistRecords([rec]))){RECS.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
+   sessionSaved++;
+   resetCapture();setState('idle');updateCounts();
+   setMessage('Saved ('+qty+' units, '+rec.scannedBy+'). Tap Start camera for the next label.');
+   $('cameraStatus').textContent='Ready for the next label.';
+   scheduleSync();
+  }finally{saving=false}
  };
 
  /* ---------- Sync / export ---------- */
  $('saveUrlBtn').onclick=()=>{
   const u=val('endpoint');
   if(!u.startsWith('https://script.google.com/')){setMessage('Enter a valid Apps Script /exec URL.',true);return}
-  localStorage.setItem(URL_KEY,u);setMessage('Upload URL saved on this device.');updateCounts();
+  localStorage.setItem(URL_KEY,u);setMessage('Upload URL saved on this device.');updateCounts();fetchOperators();scheduleSync();
  };
- $('syncBtn').onclick=async()=>{
-  const url=endpoint();
-  if(!url){setMessage('Save your Apps Script URL first.',true);return}
-  const records=getRecords(),pending=records.filter(x=>!x.uploaded);
-  if(!pending.length){setMessage('No pending records.');return}
-  $('syncBtn').disabled=true;let sent=0;
+ let syncing=false,syncTimer=null,lastOpsFetch=0;
+ const hhmm=()=>new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+ const scheduleSync=()=>{clearTimeout(syncTimer);syncTimer=setTimeout(()=>doSync(false),3000)};
+ const opsUrl=(u,q)=>u+(u.includes('?')?'&':'?')+q;
+ async function fetchOperators(){
+  const url=endpoint();if(!url||!navigator.onLine)return;
   try{
+   const res=await fetch(opsUrl(url,'action=operators')),d=await res.json();
+   if(d&&d.ok&&Array.isArray(d.names)){mergeOps(d.names);lastOpsFetch=Date.now()}
+  }catch(e){}
+ }
+ async function pushOperators(){
+  const url=endpoint(),p=opPending();if(!url||!p.length)return;
+  const left=[];
+  for(const name of p){
+   try{
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'addOperator',name})});
+    const d=await res.json();if(!d.ok)left.push(name);
+   }catch(e){left.push(name)}
+  }
+  setOpPending(left);
+ }
+ // manual=true: shown in the message line. Automatic runs only update the small sync status line so they never overwrite a message during verification.
+ async function doSync(manual){
+  const url=endpoint();
+  if(!url){if(manual)setMessage('Save your Apps Script URL first.',true);return}
+  if(syncing)return;
+  if(!navigator.onLine){$('syncStatus').textContent='Offline – records stay queued on this phone.';if(manual)setMessage('Offline. Records stay queued.',true);return}
+  syncing=true;$('syncBtn').disabled=true;
+  try{
+   await pushOperators();
+   if(Date.now()-lastOpsFetch>OPS_REFRESH_MS)await fetchOperators();
+   const records=getRecords(),pending=records.filter(x=>!x.uploaded);
+   if(!pending.length){$('syncStatus').textContent='Auto-sync on · nothing pending · '+hhmm();if(manual)setMessage('No pending records.');return}
+   let sent=0;
    for(let i=0;i<pending.length;i+=100){
     const chunk=pending.slice(i,i+100);
-    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({records:chunk})});
+    const body=JSON.stringify({records:chunk.map(r=>({...r,rawText:String(r.rawText||'').slice(0,SHEET_RAW_MAX)}))});
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body});
     const data=await res.json();
     if(!res.ok||!data.ok)throw new Error(data.error||'Upload failed');
-    const ids=new Set(chunk.map(x=>x.scanId));
-    records.forEach(x=>{if(ids.has(x.scanId))x.uploaded=true});
-    setRecords(records);sent+=chunk.length;
-    setMessage(`Uploading… ${sent} of ${pending.length}`);
+    chunk.forEach(x=>{x.uploaded=true});
+    await persistRecords(chunk);sent+=chunk.length;
+    $('syncStatus').textContent='Uploading… '+sent+' of '+pending.length;
    }
-   setMessage(`Successfully uploaded ${sent} records.`);updateCounts();
+   $('syncStatus').textContent='Auto-sync on · uploaded '+sent+' at '+hhmm();
+   if(manual)setMessage('Successfully uploaded '+sent+' records.');
   }catch(e){
-   setMessage('Sync interrupted: '+e.message+'. Unsent records remain on this phone.',true);updateCounts();
-  }finally{$('syncBtn').disabled=false}
- };
+   $('syncStatus').textContent='Sync failed ('+e.message+'). Will retry automatically.';
+   if(manual)setMessage('Sync interrupted: '+e.message+'. Unsent records remain on this phone.',true);
+  }finally{syncing=false;$('syncBtn').disabled=false;updateCounts()}
+ }
+ $('syncBtn').onclick=()=>doSync(true);
+ setInterval(()=>doSync(false),SYNC_EVERY_MS);
+ window.addEventListener('online',()=>doSync(false));
  $('exportBtn').onclick=()=>{
   const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded',
-   'skuCode','skuFormat','skuSource','editedSku','expiryCalculated','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
+   'qty','scannedBy','deviceLabel','skuCode','skuFormat','skuSource','editedSku','expiryCalculated','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
   const flat=r=>{const o=r.ocrOriginal||{},c=r.confidence||{},e=r.edited||{};
    const k=r.skuScanned||{};return{...r,skuCode:k.code,skuFormat:k.format,skuSource:k.source,editedSku:e.sku,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
     confBatch:c.batch,confMfg:c.mfg,confExp:c.exp,editedBatch:e.batch,editedMfg:e.mfg,editedExp:e.exp,engine:o.engine,attempts:o.attempts,ms:o.ms}};
@@ -1079,14 +1239,36 @@ function pickCode(codes){
  };
 
  /* ---------- Init ---------- */
- $('endpoint').value=endpoint();
- let act='';try{act=localStorage.getItem(TPL_ACTIVE)||''}catch(e){}
- refreshTplSelect(act);loadTpl($('tplSel').value);
- updateEngineLine();
- setState('idle');
- updateCounts();
- if('serviceWorker' in navigator && location.protocol.startsWith('http'))
-  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+ $('qty').addEventListener('input',()=>{$('qty').value=$('qty').value.replace(/\D/g,'').slice(0,5);$('qty').classList.remove('f-bad')});
+ $('operator').onchange=()=>{try{localStorage.setItem(OPSEL_KEY,$('operator').value)}catch(e){}};
+ $('opAdd').onclick=()=>{$('opAddRow').classList.remove('hidden');$('opNew').focus()};
+ $('opCancel').onclick=()=>{$('opAddRow').classList.add('hidden');$('opNew').value=''};
+ $('opSave').onclick=()=>{
+  const n=cleanName($('opNew').value);if(!n)return;
+  const a=OPS(),ex=a.find(x=>x.toLowerCase()===n.toLowerCase()),name=ex||n;
+  if(!ex){a.push(n);setOps(a);setOpPending([...opPending(),n])}   // shared to every phone through the Sheet's Operators tab on the next sync
+  renderOps(name);try{localStorage.setItem(OPSEL_KEY,name)}catch(e){}
+  $('opCancel').onclick();scheduleSync();
+ };
+ $('soundOn').onchange=()=>{try{localStorage.setItem(SND_KEY,soundOn()?'1':'0')}catch(e){}};
+ $('devLabel').onchange=()=>{try{localStorage.setItem(DEVLABEL_KEY,val('devLabel'))}catch(e){}};
+ (async()=>{
+  try{$('soundOn').checked=localStorage.getItem(SND_KEY)!=='0'}catch(e){}
+  $('devId').textContent=deviceId();$('devLabel').value=devLabel();
+  let sel='';try{sel=localStorage.getItem(OPSEL_KEY)||''}catch(e){}
+  renderOps(sel);
+  await loadRecords();
+  $('endpoint').value=endpoint();
+  let act='';try{act=localStorage.getItem(TPL_ACTIVE)||''}catch(e){}
+  refreshTplSelect(act);loadTpl($('tplSel').value);
+  updateEngineLine();
+  setState('idle');
+  updateCounts();
+  if(IDB.ok===false)setMessage('Note: this browser blocked IndexedDB, so records are kept in the smaller localStorage. Sync often.',true);
+  fetchOperators();scheduleSync();
+  if('serviceWorker' in navigator && location.protocol.startsWith('http'))
+   navigator.serviceWorker.register('./sw.js').catch(()=>{});
+ })();
 })();
 </script>
 </body>
