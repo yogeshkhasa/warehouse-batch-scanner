@@ -134,7 +134,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Prototype v0.6 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
+<footer>Prototype v0.6.1 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -196,11 +196,17 @@ function findDates(text,fmt,now){
 
 // MFG = earliest date; EXP = a later date 6-60 months after MFG. Position on the label is NOT used,
 // because printed values often sit one row off from their labels.
-function pickMfgExp(dates){
+function pickMfgExp(dates,text){
  const seen=new Set(),ds=[];
  [...dates].sort((a,b)=>a.idx-b.idx).forEach(d=>{if(!seen.has(d.value)){seen.add(d.value);ds.push(d)}});
  if(!ds.length)return{};
- if(ds.length===1)return{mfg:ds[0]};
+ if(ds.length===1){
+  // A lone date right after "Use before / Best before / Expiry" is the EXPIRY, not the MFG date
+  // (happens when the MFG value is cut off or unreadable in this read).
+  const pre=(text||'').toUpperCase().slice(Math.max(0,ds[0].idx-28),ds[0].idx);
+  if(/(USE\s*BEFORE|BEST\s*BEFORE|EXPIRY|EXP\.?\s*DATE|\bEXP\b)[^A-Z]*$/.test(pre)&&!/(MFG|MFD|MANUF)[^A-Z]*$/.test(pre))return{exp:ds[0]};
+  return{mfg:ds[0]};
+ }
  const key=d=>d.y*12+d.m,sorted=[...ds].sort((a,b)=>key(a)-key(b)),mfg=sorted[0];
  const exp=sorted.slice(1).find(d=>{const diff=key(d)-key(mfg);return diff>=6&&diff<=60});
  return{mfg,exp};
@@ -275,11 +281,11 @@ function pickBatch(text,masks,mfg){
  return null;
 }
 
-function extractFields(text,ctx,now){
+function extractFields(text,ctx,now,mfgOv){
  ctx=ctx||{};
  const masks=ctx.masks&&ctx.masks.length?ctx.masks:DEFAULT_MASKS;
- const dates=findDates(text,ctx.dateFmt,now),pm=pickMfgExp(dates);
- const batch=pickBatch(text,masks,pm.mfg);
+ const dates=findDates(text,ctx.dateFmt,now),pm=pickMfgExp(dates,text);
+ const batch=pickBatch(text,masks,mfgOv||pm.mfg);
  let months=null;
  const mm=(text||'').toUpperCase().match(/(\d{1,3})\s*(MONTHS?|MOS?|YEARS?|YRS?)\b/);
  if(mm){const n=+mm[1]*(/^Y/.test(mm[2])?12:1);if(n>=3&&n<=120)months=n}
@@ -307,8 +313,14 @@ function fuse(reads,ctx,now){
   mp.set(key,e);
  };
  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+ // pass 1: consensus MFG across all reads, so batch characters are corrected against it in every read
+ let mfgOv=null;{
+  const tally=new Map();
+  reads.forEach(r=>{const q=extractFields(r.text,ctx,now);if(q.mfg){const e=tally.get(q.mfg.value)||{w:0,d:q.mfg};e.w+=(r.weight||1)*clamp((r.conf||0)/100,.25,1);tally.set(q.mfg.value,e)}});
+  let bw=0;tally.forEach(e=>{if(e.w>bw){bw=e.w;mfgOv=e.d}});
+ }
  reads.forEach((r,i)=>{
-  const p=extractFields(r.text,ctx,now),rw=r.weight||1,base=rw*clamp((r.conf||0)/100,.25,1),meta={engine:r.engine,variant:r.variant,idx:i};
+  const p=extractFields(r.text,ctx,now,mfgOv),rw=r.weight||1,base=rw*clamp((r.conf||0)/100,.25,1),meta={engine:r.engine,variant:r.variant,idx:i};
   if(p.batch){const wc=wordConf(r.words,p.batch.raw,(r.conf||0)*.85)/100;add('batch',p.batch.value,rw*clamp(wc,.25,1)*p.batch.validity,{...meta,...p.batch})}
   if(p.mfg)add('mfg',p.mfg.value,base*(p.mfg.fixed?.8:1),{...meta,...p.mfg});
   if(p.exp)add('exp',p.exp.value,base*(p.exp.fixed?.8:1),{...meta,...p.exp});
