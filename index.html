@@ -37,6 +37,12 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 input.f-chk{border-color:#e0a100;background:#fffaf0}input.f-bad{border-color:#c0392b;background:#fff5f4}
 #skuChip{position:absolute;left:8px;right:8px;top:8px;z-index:3;padding:5px 8px;border-radius:8px;background:rgba(0,0,0,.68);color:#fff;font-size:13px;font-weight:700;text-align:center;pointer-events:none}
 #skuChip.ok{background:rgba(22,115,58,.92)}
+#binCard{position:sticky;top:0;z-index:6;box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.binId{font-size:20px;font-weight:800;letter-spacing:.3px;word-break:break-all}
+#binLines .ln{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #edf1ee;font-size:13px}
+#binLines .ln.void{text-decoration:line-through;color:#8a948e}
+#binLines button{flex:none;padding:4px 10px;font-size:12px}
+#binInput.f-ok{border-color:#176b50;background:#eef8f2}
 label.chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px}
 label.chk input{width:auto;margin:0}
 #operator{flex:1}
@@ -47,8 +53,28 @@ details.card summary{font-weight:700;cursor:pointer}
 </style>
 </head>
 <body>
-<header><h1>Warehouse Batch Scanner</h1><p>One label at a time · Verify before save · Google Sheets sync</p></header>
+<header><h1>Warehouse Batch Scanner</h1><p>Bin first · one label at a time · Verify before save · Google Sheets sync</p></header>
 <main>
+
+<section class="card" id="binCard">
+ <div class="row spread"><strong>Bin</strong><span class="pill" id="binPill">No bin open</span></div>
+ <div id="binPick">
+  <p class="status" id="binHint">Step 1: tap Start camera and show the bin barcode. If it will not scan, tap Read printed text, or type the bin ID.</p>
+  <label for="binInput">Bin ID</label>
+  <input id="binInput" placeholder="e.g. LSA2-F-20-L3-03" autocapitalize="characters" autocomplete="off" maxlength="40">
+  <div class="row" style="margin-top:8px"><button id="binOpen">Open bin</button><button id="binRead" class="secondary">Read printed text</button><button id="binRescan" class="secondary hidden">Rescan</button></div>
+ </div>
+ <div id="binOpenBox" class="hidden">
+  <div class="binId" id="binTitle"></div>
+  <div class="status" id="binStats"></div>
+  <div class="row" style="margin-top:8px"><button id="binClose" class="secondary">Close bin</button><button id="binLinesBtn" class="secondary">Show lines</button></div>
+  <div id="binCloseBox" class="hidden" style="margin-top:8px;padding:8px;border:1px solid #9cb7a8;border-radius:8px">
+   <div id="binCloseTxt"></div>
+   <div class="row" style="margin-top:6px"><button id="binCloseYes">Close bin</button><button id="binCloseNo" class="secondary">Keep scanning</button></div>
+  </div>
+  <div id="binLines" class="hidden"></div>
+ </div>
+</section>
 
 <section class="card">
  <div class="row spread"><strong>1. Capture one label</strong><span class="pill" id="ocrState">OCR not started</span></div>
@@ -116,6 +142,9 @@ details.card summary{font-weight:700;cursor:pointer}
  <div class="row" style="margin-top:8px">
   <button id="saveUrlBtn" class="secondary">Save URL</button><button id="syncBtn">Sync queued records</button>
  </div>
+ <label for="binPat">Bin ID format (advanced – regular expression)</label>
+ <input id="binPat" placeholder="^[A-Z0-9]+(-[A-Z0-9]+){2,}$" autocapitalize="off" spellcheck="false">
+ <small>Default: three or more parts joined by hyphens (any length), like LSA2-F-20-L3-03. A product barcode such as an EAN-13 never matches. You can always type a bin ID that does not match.</small>
  <label for="devLabel">This device's name (optional, e.g. Counter-1)</label>
  <input id="devLabel" placeholder="Counter-1" maxlength="30">
  <small>Device ID: <b id="devId"></b> – generated once per phone, so scans from different phones can be told apart.</small>
@@ -157,7 +186,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Khasa Prototype v0.8 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
+<footer>Khasa Prototype v0.9 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -374,6 +403,20 @@ function fuse(reads,ctx,now){
  if(res.months)res.months.conf=conf(res.months,1,0,0);
  return res;
 }
+// ---- Bin IDs (pure) ----
+const DEFAULT_BIN_PATTERN='^[A-Z0-9]+(-[A-Z0-9]+){2,}$';   // 3 or more parts joined by hyphens, any length: LSA2-F-20-L3-03
+function normBin(s){return String(s==null?'':s).toUpperCase().replace(/[\u2010-\u2015\u2212]/g,'-').replace(/\s*-\s*/g,'-').replace(/\s+/g,'').trim()}
+function binOk(s,pat){let re;try{re=new RegExp(pat||DEFAULT_BIN_PATTERN)}catch(e){re=new RegExp(DEFAULT_BIN_PATTERN)}return re.test(s)}
+function binTypedOk(s){return /^[A-Z0-9][A-Z0-9\-_\/.]{2,39}$/.test(s)}   // loose rule for typed IDs: a bin ID of any length/shape is accepted
+// Several bin labels can be in one frame (the shelf rail above, the bin itself, the rail below):
+// take the one nearest the centre of the frame, which is the one the person is pointing at.
+function pickBinCode(cands,w,h,pat){
+ const ok=(cands||[]).map(c=>({...c,text:normBin(c.text)})).filter(c=>c.text&&binOk(c.text,pat));
+ if(!ok.length)return null;
+ const mx=w/2,my=h/2,d=c=>Math.hypot((c.cx==null?mx:c.cx)-mx,(c.cy==null?my:c.cy)-my);
+ ok.sort((a,b)=>d(a)-d(b));
+ return{text:ok[0].text,cx:ok[0].cx,cy:ok[0].cy};
+}
 // ---- Expiry calculation (pure) ----
 // Same result as Excel  =EDATE(MFG, months) - 1  : add whole months (day clamps to the month's last day), then minus one day.
 // MM/YYYY and MM/YY count as the 1st of the month, so 08/2026 + 24 months = 31 Jul 2028.
@@ -436,6 +479,9 @@ function pickCode(codes){
  let bcPromise=null,bcZX=null,bcNative=null,bcErr='',live={sku:'',fmt:'',t:0,tpl:''},liveTimer=null,skuInfo={code:'',fmt:'',src:''};
 
  const DEV_KEY='wbs_device_v1',DEVLABEL_KEY='wbs_devlabel_v1',OP_KEY='wbs_operators_v1',OPSEL_KEY='wbs_operator_v1',OPPEND_KEY='wbs_op_push_v1',SND_KEY='wbs_sound_v1';
+ const BIN_REQUIRED=true;   // true = a bin must be open before products can be captured (stock count by bin)
+ const BIN_PAT_KEY='wbs_binpat_v1',SESS_KEY='wbs_sessions_v1';
+ let BIN=null,SESS=[],binCand=null,binSeen=0,binSuppressUntil=0,binCloseShown=false,binBusy=false,binWarned='',voidArm='';
  const QTY_MAX=99999,PRUNE_DAYS=7,SHEET_RAW_MAX=500,SYNC_EVERY_MS=60000,OPS_REFRESH_MS=600000;
 
  /* ---------- Records: IndexedDB (no practical size limit) with localStorage fallback ---------- */
@@ -444,23 +490,29 @@ function pickCode(codes){
  const getRecords=()=>RECS;
  function idbOpen(){return new Promise(res=>{
   try{
-   const rq=indexedDB.open('wbs_v1',1);
-   rq.onupgradeneeded=()=>{rq.result.createObjectStore('records',{keyPath:'scanId'})};
+   const rq=indexedDB.open('wbs_v1',2);
+   rq.onupgradeneeded=()=>{const db=rq.result;
+    if(!db.objectStoreNames.contains('records'))db.createObjectStore('records',{keyPath:'scanId'});
+    if(!db.objectStoreNames.contains('sessions'))db.createObjectStore('sessions',{keyPath:'sessionId'})};
    rq.onsuccess=()=>{IDB.db=rq.result;IDB.ok=true;res(true)};
    rq.onerror=rq.onblocked=()=>res(false);
   }catch(e){res(false)}
  })}
- const idbTx=(mode,fn)=>new Promise(res=>{
+ const idbTx=(mode,fn,store='records')=>new Promise(res=>{
   if(!IDB.ok)return res(false);
-  try{const tx=IDB.db.transaction('records',mode);fn(tx.objectStore('records'));tx.oncomplete=()=>res(true);tx.onerror=tx.onabort=()=>res(false)}catch(e){res(false)}
+  try{const tx=IDB.db.transaction(store,mode);fn(tx.objectStore(store));tx.oncomplete=()=>res(true);tx.onerror=tx.onabort=()=>res(false)}catch(e){res(false)}
  });
- const idbAll=()=>new Promise(res=>{
+ const idbAll=(store='records')=>new Promise(res=>{
   if(!IDB.ok)return res(null);
-  try{const rq=IDB.db.transaction('records','readonly').objectStore('records').getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res(null)}catch(e){res(null)}
+  try{const rq=IDB.db.transaction(store,'readonly').objectStore(store).getAll();rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>res(null)}catch(e){res(null)}
  });
  async function persistRecords(list){
   if(IDB.ok)return idbTx('readwrite',st=>list.forEach(r=>st.put(r)));
   try{localStorage.setItem(DB_KEY,JSON.stringify(RECS));return true}catch(e){return false}
+ }
+ async function persistSessions(list){
+  if(IDB.ok)return idbTx('readwrite',st=>list.forEach(r=>st.put(r)),'sessions');
+  try{localStorage.setItem(SESS_KEY,JSON.stringify(SESS));return true}catch(e){return false}
  }
  async function loadRecords(){
   await idbOpen();
@@ -473,10 +525,14 @@ function pickCode(codes){
    if(legacy.length&&mig.every(r=>all.some(x=>x.scanId===r.scanId))){try{localStorage.removeItem(DB_KEY)}catch(e){}}   // moved: free the old localStorage space
    RECS=all;
   }else RECS=legacy;
+  if(IDB.ok)SESS=(await idbAll('sessions'))||[];
+  else{try{SESS=JSON.parse(localStorage.getItem(SESS_KEY)||'[]')}catch(e){SESS=[]}}
   RECS.sort((a,b)=>String(a.scanDateTime).localeCompare(String(b.scanDateTime)));
   // keep the phone light: uploaded records older than PRUNE_DAYS are dropped here (they are in the Sheet)
   const cut=Date.now()-PRUNE_DAYS*86400000,old=RECS.filter(r=>r.uploaded&&Date.parse(r.scanDateTime)<cut);
   if(old.length){RECS=RECS.filter(r=>!old.includes(r));if(IDB.ok)await idbTx('readwrite',st=>old.forEach(r=>st.delete(r.scanId)))}
+  const oldS=SESS.filter(x=>x.status==='CLOSED'&&x.uploaded&&Date.parse(x.closedAt)<cut);
+  if(oldS.length){SESS=SESS.filter(x=>!oldS.includes(x));if(IDB.ok)await idbTx('readwrite',st=>oldS.forEach(x=>st.delete(x.sessionId)),'sessions')}
  }
  function deviceId(){
   let d='';try{d=localStorage.getItem(DEV_KEY)||''}catch(e){}
@@ -515,6 +571,9 @@ function pickCode(codes){
     if(kind==='lock')tone(1800,t,0.11,0.35);
     else if(kind==='capture'){tone(900,t,0.07,0.35);tone(650,t+0.11,0.09,0.35)}
     else if(kind==='ready'){tone(1200,t,0.07,0.18);tone(1600,t+0.09,0.09,0.18)}
+    else if(kind==='open'){tone(1100,t,0.09,0.35);tone(1500,t+0.11,0.09,0.35);tone(1900,t+0.22,0.12,0.35)}
+    else if(kind==='close'){tone(1900,t,0.09,0.35);tone(1500,t+0.11,0.09,0.35);tone(1100,t+0.22,0.14,0.35)}
+    else if(kind==='bin'){tone(1500,t,0.06,0.3);tone(1500,t+0.1,0.06,0.3);tone(1500,t+0.2,0.06,0.3)}
    }
    if(navigator.vibrate)navigator.vibrate(kind==='lock'?[60]:(kind==='capture'?[40,40,40]:[25]));
   }catch(e){}
@@ -541,8 +600,11 @@ function pickCode(codes){
  /* ---------- UI state ---------- */
  // Capture stays locked until a barcode has been read (or the person taps "No barcode – skip").
  // If the barcode reader failed to load, nothing is gated.
- function gated(){return state==='live'&&SKU_FIRST&&BC.enabled&&!!(bcZX||bcNative)&&!live.sku&&!skipSku}
- function updateGate(){if(state==='live'){$('captureBtn').disabled=gated();$('skipBtn').classList.toggle('hidden',!gated())}}
+ function binGated(){return state==='live'&&BIN_REQUIRED&&!BIN}
+ function skuGated(){return state==='live'&&SKU_FIRST&&BC.enabled&&!!(bcZX||bcNative)&&!live.sku&&!skipSku}
+ function gated(){return binGated()||skuGated()}
+ const skipVisible=()=>state==='live'&&!binGated()&&skuGated();
+ function updateGate(){if(state==='live'){$('captureBtn').disabled=gated();$('skipBtn').classList.toggle('hidden',!skipVisible())}}
  function setState(s){
   state=s;
   const idle=s==='idle',live=s==='live',cap=s==='captured';
@@ -550,7 +612,7 @@ function pickCode(codes){
   $('previewBox').classList.toggle('hidden',!cap);
   $('startBtn').disabled=!idle;
   $('captureBtn').disabled=!live||gated();
-  $('skipBtn').classList.toggle('hidden',!(live&&gated()));
+  $('skipBtn').classList.toggle('hidden',!skipVisible());
   $('cancelBtn').disabled=!live;
   $('retakeBtn').disabled=!cap;
   $('saveBtn').disabled=!(cap&&current);
@@ -980,6 +1042,10 @@ function pickCode(codes){
   for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++)m=Math.max(m,Math.hypot((a[i].x||0)-(a[j].x||0),(a[i].y||0)-(a[j].y||0)));
   return m;
  }
+ function ptsCenter(p){
+  const a=Array.isArray(p)?p:Object.values(p||{});if(!a.length)return{cx:null,cy:null};
+  return{cx:a.reduce((x,q)=>x+(q.x||0),0)/a.length,cy:a.reduce((x,q)=>x+(q.y||0),0)/a.length};
+ }
  function initBarcode(){
   if(!BC.enabled)return Promise.resolve(false);
   if(bcPromise)return bcPromise;
@@ -1004,7 +1070,7 @@ function pickCode(codes){
  }
  async function detectCodes(canvas){
   const out=[];
-  if(bcNative){try{(await bcNative.detect(canvas)).forEach(c=>out.push({text:c.rawValue,format:NATIVE_BACK[c.format]||c.format,size:ptsSize(c.cornerPoints)}))}catch(e){}}
+  if(bcNative){try{(await bcNative.detect(canvas)).forEach(c=>out.push({text:c.rawValue,format:NATIVE_BACK[c.format]||c.format,size:ptsSize(c.cornerPoints),...ptsCenter(c.cornerPoints)}))}catch(e){}}
   if(!out.length&&bcZX){
    try{
     const id=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,canvas.width,canvas.height);
@@ -1012,7 +1078,7 @@ function pickCode(codes){
     // inkjet-style bars (like these tubes) are often only read by the second pass.
     for(const bin of ['LocalAverage','FixedThreshold']){
      const r=await bcZX.readBarcodes(id,{formats:BC.formats,binarizer:bin,tryHarder:true,tryRotate:true,tryInvert:false,tryDownscale:true,maxNumberOfSymbols:3});
-     r.forEach(c=>{if(c.isValid!==false&&c.text)out.push({text:c.text,format:c.format,size:ptsSize(c.position)})});
+     r.forEach(c=>{if(c.isValid!==false&&c.text)out.push({text:c.text,format:c.format,size:ptsSize(c.position),...ptsCenter(c.position)})});
      if(out.length)break;
     }
    }catch(e){}
@@ -1036,26 +1102,44 @@ function pickCode(codes){
  }
  function showChip(){
   const el=$('skuChip');if(!el)return;
+  if(BIN_REQUIRED&&!BIN&&state==='live'){
+   if(binCand){el.className='ok';el.textContent='Bin '+binCand.text+' – check it in the Bin box, then tap Open bin'}
+   else{el.className='';el.textContent=(bcZX||bcNative)?'Step 1: centre the BIN barcode (or tap Read printed text)':'Barcode reader loading… you can type the bin ID or tap Read printed text'}
+   return;
+  }
   if(live.sku){el.className='ok';el.textContent='SKU '+live.sku+' ✓'+(live.tpl?'  ·  '+live.tpl:'')+(SKU_FIRST?'  –  now frame the batch block, tap Capture':'')}
   else{
    el.className='';
-   el.textContent=!BC.enabled?'Barcode reading is off':((bcZX||bcNative)?(SKU_FIRST?(skipSku?'Barcode skipped – type the SKU after capture':'Step 1: show the barcode to the camera'):'Barcode not seen yet – keep it in view'):(bcErr?'Barcode reader unavailable – type the SKU':'Barcode reader loading…'));
+   el.textContent=!BC.enabled?'Barcode reading is off':((bcZX||bcNative)?(SKU_FIRST?(skipSku?'Barcode skipped – type the SKU after capture':'Show the PRODUCT barcode to the camera'):'Barcode not seen yet – keep it in view'):(bcErr?'Barcode reader unavailable – type the SKU':'Barcode reader loading…'));
   }
  }
  function scheduleLive(){if(state==='live'&&!liveTimer)liveTimer=setTimeout(liveTick,BC.liveMs)}
  async function liveTick(){
   liveTimer=null;
   if(state!=='live')return;
+  if(binBusy){scheduleLive();return}
   try{
    if((bcZX||bcNative)&&$('video').readyState>=2){
-    const c=frameCanvas(BC.maxW),hit=c?pickCode(await detectCodes(c)):null;
+    const c=frameCanvas(BC.maxW),codes=c?await detectCodes(c):[];
     if(state!=='live')return;
-    if(hit){
-     const changed=hit.text!==live.sku;
-     live={sku:hit.text,fmt:hit.format,t:Date.now(),tpl:live.tpl};
-     if(changed){live.tpl=autoTemplate(hit.text);beep('lock')}
-     showChip();updateGate();
-    }else if(!SKU_FIRST&&live.sku&&Date.now()-live.t>BC.maxAgeMs){live={sku:'',fmt:'',t:0,tpl:''};showChip()}
+    if(BIN_REQUIRED&&!BIN){
+     // Step 1: find the bin label. Once one is locked it stays put until Open bin / Rescan, so it cannot flip while the phone moves.
+     if(!binCand&&c){const hit=pickBinCode(codes,c.width,c.height,binPattern());if(hit)setBinCandidate(hit.text,'scan')}
+    }else{
+     const prod=codes.filter(x=>!(BIN_REQUIRED&&binOk(normBin(x.text),binPattern())));   // a bin label is never taken as a product SKU
+     const hit=pickCode(prod);
+     if(hit){
+      const changed=hit.text!==live.sku;
+      live={sku:hit.text,fmt:hit.format,t:Date.now(),tpl:live.tpl};
+      if(changed){live.tpl=autoTemplate(hit.text);beep('lock')}
+      showChip();updateGate();
+     }else if(!SKU_FIRST&&live.sku&&Date.now()-live.t>BC.maxAgeMs){live={sku:'',fmt:'',t:0,tpl:''};showChip()}
+     // Scanning the open bin's barcode again offers to close it (only before a product barcode is locked, and seen twice in a row)
+     if(BIN&&!live.sku&&!binCloseShown&&Date.now()>binSuppressUntil){
+      binSeen=codes.some(x=>normBin(x.text)===BIN.binId)?binSeen+1:0;
+      if(binSeen>=2){binSeen=0;promptClose()}
+     }
+    }
    }
   }catch(e){}
   scheduleLive();
@@ -1065,7 +1149,7 @@ function pickCode(codes){
  async function resolveSku(fullC){
   skuInfo={code:'',fmt:'',src:''};
   let hit=null;
-  if(fullC&&(bcZX||bcNative)){try{hit=pickCode(await detectCodes(fullC))}catch(e){}}
+  if(fullC&&(bcZX||bcNative)){try{hit=pickCode((await detectCodes(fullC)).filter(x=>!(BIN_REQUIRED&&binOk(normBin(x.text),binPattern()))))}catch(e){}}
   if(hit)skuInfo={code:hit.text,fmt:hit.format,src:'still'};
   else if(live.sku&&(SKU_FIRST||Date.now()-live.t<=BC.maxAgeMs))skuInfo={code:live.sku,fmt:live.fmt,src:'live'};
   $('sku').value=skuInfo.code;
@@ -1080,6 +1164,118 @@ function pickCode(codes){
   }
  }
 
+ /* ---------- Bin sessions (stock count) ---------- */
+ const binPattern=()=>{try{return localStorage.getItem(BIN_PAT_KEY)||DEFAULT_BIN_PATTERN}catch(e){return DEFAULT_BIN_PATTERN}};
+ const hm=iso=>{try{return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}};
+ const binLinesOf=sid=>RECS.filter(r=>r.binSession===sid);
+ function binSummary(sid){const l=binLinesOf(sid).filter(r=>!r.voided);return{lines:l.length,units:l.reduce((a,r)=>a+(+r.qty||0),0)}}
+ async function touchSession(x){x.uploaded=false;return persistSessions([x])}
+ function renderBin(){
+  const open=!!BIN;
+  $('binPick').classList.toggle('hidden',open);
+  $('binOpenBox').classList.toggle('hidden',!open);
+  $('binPill').textContent=open?'Bin open':(BIN_REQUIRED?'No bin open':'Bin off');
+  $('operator').disabled=open;$('opAdd').disabled=open;      // one person per bin session
+  $('guide').style.display=(BIN_REQUIRED&&!BIN)?'none':'';
+  $('guideTxt').textContent=(BIN_REQUIRED&&!BIN)?'Centre the bin label (or tap Read printed text)':'Show the product barcode first, then the batch block in this box';
+  $('binRescan').classList.toggle('hidden',!binCand);
+  if(open){
+   const sm=binSummary(BIN.sessionId),old=Date.now()-Date.parse(BIN.openedAt)>12*3600000;
+   $('binTitle').textContent=BIN.binId;
+   $('binStats').textContent=sm.lines+' line'+(sm.lines===1?'':'s')+' · '+sm.units+' units · opened '+hm(BIN.openedAt)+' by '+BIN.operator+(old?'  –  OPEN FOR A LONG TIME, close it':'');
+   renderBinLines();
+  }
+  showChip();updateGate();
+ }
+ function renderBinLines(){
+  const box=$('binLines');box.innerHTML='';
+  if(!BIN)return;
+  const ls=binLinesOf(BIN.sessionId).slice().sort((a,b)=>(a.lineNo||0)-(b.lineNo||0));
+  if(!ls.length){box.textContent='No lines yet.';return}
+  ls.forEach(r=>{
+   const d=document.createElement('div');d.className='ln'+(r.voided?' void':'');
+   const t=document.createElement('span');t.textContent='#'+r.lineNo+' · '+(r.sku||'(no SKU)')+' · '+(r.batch||'(no batch)')+' · Qty '+r.qty+(r.voided?' · VOID':'');
+   d.appendChild(t);
+   if(!r.voided){const b=document.createElement('button');b.className='secondary';b.dataset.id=r.scanId;b.textContent=voidArm===r.scanId?'Sure? Void':'Void';
+    b.onclick=async()=>{
+     if(voidArm!==r.scanId){voidArm=r.scanId;renderBinLines();setTimeout(()=>{if(voidArm===r.scanId){voidArm='';renderBinLines()}},4000);return}
+     voidArm='';r.voided=true;r.voidedAt=new Date().toISOString();r.uploaded=false;
+     await persistRecords([r]);await touchSession(BIN);renderBin();updateCounts();scheduleSync();
+    };d.appendChild(b)}
+   box.appendChild(d);
+  });
+ }
+ function setBinCandidate(text,src){
+  binCand={text,src};binWarned='';
+  $('binInput').value=text;$('binInput').classList.add('f-ok');
+  $('binHint').textContent=src==='ocr'?'Read from the printed text – check every character (O/0, I/1), then tap Open bin.':'Bin barcode read. Check it, then tap Open bin.';
+  beep('lock');renderBin();
+ }
+ function clearBinCandidate(){binCand=null;binWarned='';$('binInput').classList.remove('f-ok');$('binHint').textContent='Step 1: centre the bin barcode, or tap Read printed text, or type the bin ID.';renderBin()}
+ $('binRescan').onclick=()=>{$('binInput').value='';clearBinCandidate()};
+ $('binInput').addEventListener('input',()=>{
+  const v=normBin($('binInput').value);binWarned='';$('binInput').classList.remove('f-ok');
+  binCand=v?{text:v,src:'manual'}:null;renderBin();       // typing freezes scanning so it cannot overwrite what is typed
+ });
+ $('binOpen').onclick=async()=>{
+  const v=normBin($('binInput').value);
+  if(!operatorName()){setMessage('Select your name under "Scanned by" first.',true);$('operator').focus();return}
+  if(!binTypedOk(v)){setMessage('Enter or scan the bin ID (3–40 characters: letters, digits, - _ / .).',true);$('binInput').focus();return}
+  if(!binOk(v,binPattern())&&binWarned!==v){binWarned=v;setMessage('"'+v+'" does not look like your usual bin IDs. Tap Open bin again if it is correct.',true);return}
+  const src=binCand?binCand.src:'manual';
+  const sess={sessionId:crypto.randomUUID?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(16).slice(2),
+   binId:v,binSource:src,operator:operatorName(),deviceId:deviceId(),deviceLabel:devLabel(),openedAt:new Date().toISOString(),closedAt:'',status:'OPEN',lineSeq:0,uploaded:false};
+  BIN=sess;SESS.push(sess);await persistSessions([sess]);
+  binCand=null;binWarned='';$('binInput').value='';$('binInput').classList.remove('f-ok');
+  live={sku:'',fmt:'',t:0,tpl:''};skipSku=false;binCloseShown=false;binSeen=0;
+  beep('open');setMessage('Bin '+v+' open. Scan the first product.');renderBin();scheduleSync();
+  if(state==='idle'){resetCapture();startCamera()}     // typed with the camera off: start it for the products
+ };
+ function promptClose(){
+  if(!BIN||binCloseShown)return;
+  if(state==='captured'){setMessage('Save or Retake the product on screen before closing the bin.',true);return}
+  const sm=binSummary(BIN.sessionId);
+  $('binCloseTxt').textContent='Close bin '+BIN.binId+'? '+(sm.lines?sm.lines+' line'+(sm.lines===1?'':'s')+', '+sm.units+' units.':'No lines – empty bin.');
+  $('binCloseBox').classList.remove('hidden');binCloseShown=true;beep('bin');
+ }
+ $('binClose').onclick=promptClose;
+ $('binCloseNo').onclick=()=>{$('binCloseBox').classList.add('hidden');binCloseShown=false;binSuppressUntil=Date.now()+30000};
+ $('binCloseYes').onclick=async()=>{
+  if(!BIN)return;
+  if(state==='captured'){setMessage('Save or Retake the product on screen before closing the bin.',true);return}
+  const sm=binSummary(BIN.sessionId),was=BIN;
+  was.status='CLOSED';was.closedAt=new Date().toISOString();await touchSession(was);
+  BIN=null;binCloseShown=false;binCand=null;$('binCloseBox').classList.add('hidden');$('binLines').classList.add('hidden');$('binLinesBtn').textContent='Show lines';
+  stopStream();setState('idle');resetCapture();beep('close');
+  renderBin();updateCounts();
+  setMessage('Bin '+was.binId+' closed: '+sm.lines+' line'+(sm.lines===1?'':'s')+', '+sm.units+' units. Tap Start camera and scan the next bin.');
+  $('cameraStatus').textContent='Bin closed. Scan the next bin to continue.';
+  scheduleSync();
+ };
+ $('binLinesBtn').onclick=()=>{const b=$('binLines');b.classList.toggle('hidden');$('binLinesBtn').textContent=b.classList.contains('hidden')?'Show lines':'Hide lines'};
+ // Fallback when the barcode will not scan: read the printed ID under it with the on-device PaddleOCR text finder.
+ $('binRead').onclick=async()=>{
+  if(state!=='live'){setMessage('Tap Start camera, aim at the bin label, then tap Read printed text.',true);return}
+  const c=frameCanvas(1600);if(!c){setMessage('Camera is not ready yet.',true);return}
+  const snap=copyCanvas(c);binBusy=true;$('binRead').disabled=true;$('binHint').textContent='Reading printed text…';
+  try{
+   const ok=await Promise.race([initPaddle(),sleep(15000).then(()=>false)]);
+   if(!ok||!paddle){$('binHint').textContent='Printed-text reading is not available on this phone. Type the bin ID.';return}
+   const res=await paddle.detect(snap.toDataURL('image/png'));
+   const cands=((res&&res.texts)||[]).map(l=>{const b=l.box||[];const pts=b.map(p=>Array.isArray(p)?{x:p[0],y:p[1]}:p);const ct=ptsCenter(pts);return{text:l.text||'',cx:ct.cx,cy:ct.cy}});
+   const hit=pickBinCode(cands,snap.width,snap.height,binPattern());
+   if(hit)setBinCandidate(hit.text,'ocr');
+   else $('binHint').textContent='No bin ID found in view. Move closer so the printed ID is sharp, or type it.';
+  }catch(e){$('binHint').textContent='Could not read the text ('+e.message+'). Type the bin ID.'}
+  finally{binBusy=false;$('binRead').disabled=false}
+ };
+ $('binPat').onchange=()=>{
+  const v=$('binPat').value.trim();
+  if(v){try{new RegExp(v)}catch(e){setMessage('That is not a valid pattern.',true);$('binPat').value='';return}}
+  try{if(v)localStorage.setItem(BIN_PAT_KEY,v);else localStorage.removeItem(BIN_PAT_KEY)}catch(e){}
+  setMessage(v?'Bin ID format saved.':'Bin ID format reset to the default.');
+ };
+
  /* ---------- Camera flow ---------- */
  async function startCamera(){
   setMessage('');
@@ -1091,9 +1287,9 @@ function pickCode(codes){
    try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch{}
    $('video').srcObject=stream;
    await $('video').play();
-   live={sku:'',fmt:'',t:0,tpl:''};skipSku=false;showChip();
-   setState('live');scheduleLive();
-   $('cameraStatus').textContent=SKU_FIRST?'Step 1: show the barcode (it locks by itself). Step 2: put the batch block in the yellow box and tap Capture.':'Batch / Mfg block inside the yellow box, barcode in view, hold still, tap Capture.';
+   live={sku:'',fmt:'',t:0,tpl:''};skipSku=false;binSeen=0;
+   setState('live');renderBin();scheduleLive();
+   $('cameraStatus').textContent=(BIN_REQUIRED&&!BIN)?'Step 1: centre the BIN barcode so it locks, check the Bin box above, then tap Open bin.':SKU_FIRST?'Step 1: show the barcode (it locks by itself). Step 2: put the batch block in the yellow box and tap Capture.':'Batch / Mfg block inside the yellow box, barcode in view, hold still, tap Capture.';
   }catch(e){
    stopStream();setState('idle');
    $('cameraStatus').textContent='Cannot start camera: '+e.message;
@@ -1118,7 +1314,7 @@ function pickCode(codes){
   await runOCR(c);
  };
  $('skipBtn').onclick=()=>{skipSku=true;showChip();updateGate()};
- $('cancelBtn').onclick=()=>{stopStream();setState('idle');resetCapture();$('cameraStatus').textContent='Camera stopped. Nothing captured.'};
+ $('cancelBtn').onclick=()=>{stopStream();setState('idle');resetCapture();if(!BIN)clearBinCandidate();$('cameraStatus').textContent='Camera stopped. Nothing captured.'};
  $('retakeBtn').onclick=()=>{resetCapture();startCamera()};
 
  let saving=false;
@@ -1127,6 +1323,7 @@ function pickCode(codes){
   const batch=val('batch'),mfg=val('mfg'),expiry=val('expiry'),months=val('bbMonths'),rawText=val('rawText');
   if(!batch&&!mfg&&!rawText){setMessage('Nothing to save. Retake the label.',true);return}
   if(!operatorName()){setMessage('Select your name under "Scanned by" before saving.',true);return}
+  if(BIN_REQUIRED&&!BIN){setMessage('No bin is open. Close this screen with Retake and open a bin first.',true);return}
   const qty=/^\d+$/.test(val('qty'))?parseInt(val('qty'),10):0;
   if(!(qty>=1&&qty<=QTY_MAX)){
    $('qty').classList.add('f-bad');$('qty').focus();
@@ -1141,6 +1338,7 @@ function pickCode(codes){
   const rec={
    scanId:crypto.randomUUID?crypto.randomUUID():String(now.getTime())+'-'+Math.random().toString(16).slice(2),
    scanDateTime:now.toISOString(),deviceId:deviceId(),deviceLabel:devLabel(),scannedBy:operatorName(),qty,
+   binId:BIN?BIN.binId:'',binSession:BIN?BIN.sessionId:'',lineNo:BIN?++BIN.lineSeq:0,binSource:BIN?BIN.binSource:'',voided:false,
    sku:val('sku'),skuScanned:{code:skuInfo.code,format:skuInfo.fmt,source:skuInfo.src},batch,mfg,bestBeforeMonths:months,expiry,
    ocrConfidence:Math.max(cf.batch,cf.mfg),
    ocrStatus:(batch&&mfg&&!unresolved.length)?'REVIEWED':'NEEDS_REVIEW',
@@ -1155,12 +1353,14 @@ function pickCode(codes){
   saving=true;
   try{
    RECS.push(rec);
-   if(!(await persistRecords([rec]))){RECS.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
+   if(!(await persistRecords([rec]))){RECS.pop();if(BIN)BIN.lineSeq--;setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
+   if(BIN)await touchSession(BIN);
    sessionSaved++;
    resetCapture();setState('idle');updateCounts();
-   setMessage('Saved ('+qty+' units, '+rec.scannedBy+'). Tap Start camera for the next label.');
-   $('cameraStatus').textContent='Ready for the next label.';
+   renderBin();
    scheduleSync();
+   if(BIN){const okMsg='Saved line #'+rec.lineNo+' ('+qty+' units) in '+BIN.binId+'. Next product – or scan the bin again to close it.';resetCapture();startCamera();setMessage(okMsg)}   // camera restarts by itself within a bin
+   else{setMessage('Saved ('+qty+' units, '+rec.scannedBy+'). Tap Start camera for the next label.');$('cameraStatus').textContent='Ready for the next label.'}
   }finally{saving=false}
  };
 
@@ -1193,6 +1393,13 @@ function pickCode(codes){
   setOpPending(left);
  }
  // manual=true: shown in the message line. Automatic runs only update the small sync status line so they never overwrite a message during verification.
+ async function pushSessions(){
+  const url=endpoint(),p=SESS.filter(x=>!x.uploaded);if(!url||!p.length)return;
+  const body=JSON.stringify({sessions:p.map(x=>({...x,...binSummary(x.sessionId)}))});
+  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body}),d=await res.json();
+  if(!res.ok||!d.ok)throw new Error(d.error||'Bin upload failed');
+  p.forEach(x=>{x.uploaded=true});await persistSessions(p);
+ }
  async function doSync(manual){
   const url=endpoint();
   if(!url){if(manual)setMessage('Save your Apps Script URL first.',true);return}
@@ -1201,6 +1408,7 @@ function pickCode(codes){
   syncing=true;$('syncBtn').disabled=true;
   try{
    await pushOperators();
+   try{await pushSessions()}catch(e){}      // bin sessions retry next cycle; never block the scan records
    if(Date.now()-lastOpsFetch>OPS_REFRESH_MS)await fetchOperators();
    const records=getRecords(),pending=records.filter(x=>!x.uploaded);
    if(!pending.length){$('syncStatus').textContent='Auto-sync on · nothing pending · '+hhmm();if(manual)setMessage('No pending records.');return}
@@ -1227,7 +1435,7 @@ function pickCode(codes){
  window.addEventListener('online',()=>doSync(false));
  $('exportBtn').onclick=()=>{
   const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded',
-   'qty','scannedBy','deviceLabel','skuCode','skuFormat','skuSource','editedSku','expiryCalculated','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
+   'qty','scannedBy','deviceLabel','binId','binSession','lineNo','binSource','voided','skuCode','skuFormat','skuSource','editedSku','expiryCalculated','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
   const flat=r=>{const o=r.ocrOriginal||{},c=r.confidence||{},e=r.edited||{};
    const k=r.skuScanned||{};return{...r,skuCode:k.code,skuFormat:k.format,skuSource:k.source,editedSku:e.sku,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
     confBatch:c.batch,confMfg:c.mfg,confExp:c.exp,editedBatch:e.batch,editedMfg:e.mfg,editedExp:e.exp,engine:o.engine,attempts:o.attempts,ms:o.ms}};
@@ -1255,6 +1463,7 @@ function pickCode(codes){
  (async()=>{
   try{$('soundOn').checked=localStorage.getItem(SND_KEY)!=='0'}catch(e){}
   $('devId').textContent=deviceId();$('devLabel').value=devLabel();
+  try{$('binPat').value=localStorage.getItem(BIN_PAT_KEY)||''}catch(e){}
   let sel='';try{sel=localStorage.getItem(OPSEL_KEY)||''}catch(e){}
   renderOps(sel);
   await loadRecords();
@@ -1262,7 +1471,10 @@ function pickCode(codes){
   let act='';try{act=localStorage.getItem(TPL_ACTIVE)||''}catch(e){}
   refreshTplSelect(act);loadTpl($('tplSel').value);
   updateEngineLine();
+  BIN=SESS.filter(x=>x.status==='OPEN'&&x.deviceId===deviceId()).sort((a,b)=>String(a.openedAt).localeCompare(String(b.openedAt))).pop()||null;   // resume after reload / battery
+  if(BIN&&BIN.operator){renderOps(BIN.operator)}
   setState('idle');
+  renderBin();
   updateCounts();
   if(IDB.ok===false)setMessage('Note: this browser blocked IndexedDB, so records are kept in the smaller localStorage. Sync often.',true);
   fetchOperators();scheduleSync();
