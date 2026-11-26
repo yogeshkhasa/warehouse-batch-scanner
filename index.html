@@ -35,6 +35,8 @@ footer{font-size:12px;color:#66776e;text-align:center;padding:8px}
 .cb:empty{display:none}
 .cb.ok{background:#e7f3ec;color:#176b50}.cb.chk{background:#fff1cc;color:#8a5a00}.cb.bad{background:#fde1de;color:#a33}.cb.done{background:#e0ecff;color:#1d4f9c}
 input.f-chk{border-color:#e0a100;background:#fffaf0}input.f-bad{border-color:#c0392b;background:#fff5f4}
+#skuChip{position:absolute;left:8px;right:8px;top:8px;z-index:3;padding:5px 8px;border-radius:8px;background:rgba(0,0,0,.68);color:#fff;font-size:13px;font-weight:700;text-align:center;pointer-events:none}
+#skuChip.ok{background:rgba(22,115,58,.92)}
 #notes{font-size:12px;color:#5a4a1f;margin-top:8px;white-space:pre-wrap}
 .hint{font-size:11px;color:#64756c;margin:3px 0 0}
 details.card summary{font-weight:700;cursor:pointer}
@@ -49,17 +51,19 @@ details.card summary{font-weight:700;cursor:pointer}
  <div class="row spread"><strong>1. Capture one label</strong><span class="pill" id="ocrState">OCR not started</span></div>
  <div id="camwrap" class="camwrap hidden">
   <video id="video" playsinline muted></video>
-  <div class="guideTxt" id="guideTxt">Fit Batch / Mfg / MRP block inside the box</div>
+  <div id="skuChip">Barcode reader loading…</div>
+  <div class="guideTxt" id="guideTxt">Show the barcode first, then the batch block in this box</div>
   <div id="guide" class="guide"></div>
  </div>
  <div id="previewBox" class="preview hidden">
   <img id="preview" alt="Captured label area">
   <small>This is the area that was read. Compare the fields below against it.</small>
  </div>
- <canvas id="canvas" hidden></canvas>
+ <canvas id="canvas" hidden></canvas><canvas id="bcCanvas" hidden></canvas>
  <div class="row" style="margin-top:10px">
   <button id="startBtn">Start camera</button>
   <button id="captureBtn" disabled>Capture</button>
+  <button id="skipBtn" class="secondary hidden">No barcode – skip</button>
   <button id="cancelBtn" class="secondary" disabled>Cancel</button>
  </div>
  <p class="status" id="cameraStatus">Use HTTPS (or localhost) and allow camera access. Hold the phone straight on to the label, 15–20 cm away, no glare.</p>
@@ -73,8 +77,9 @@ details.card summary{font-weight:700;cursor:pointer}
  <div class="status" id="ocrConf" style="margin-top:6px"></div>
  <div id="warn" role="alert"></div>
 
- <label for="sku">SKU / Product (optional)</label>
- <input id="sku" placeholder="Enter SKU or product" disabled>
+ <label for="sku">SKU (from barcode)<span class="cb" id="cb_sku"></span></label>
+ <input id="sku" placeholder="Read from barcode, or type it" disabled>
+ <div class="hint" id="skuNote"></div>
  <div class="grid">
   <div><label for="batch">Batch / Lot No.<span class="cb" id="cb_batch"></span></label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
   <div><label for="mfg">MFG date<span class="cb" id="cb_mfg"></span></label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
@@ -115,6 +120,8 @@ details.card summary{font-weight:700;cursor:pointer}
  <select id="tplSel"><option value="">(none – default settings)</option></select>
  <label for="tplName">Template name</label>
  <input id="tplName" placeholder="e.g. Aqualogica tube">
+ <label for="tplSku">SKU barcode for this template (optional – auto-selects it when scanned)</label>
+ <div class="row" style="flex-wrap:nowrap"><input id="tplSku" placeholder="e.g. 8904417325508" inputmode="numeric"><button id="tplSkuFill" class="secondary" style="flex:none">Use scanned SKU</button></div>
  <label for="tplMasks">Batch format(s)</label>
  <input id="tplMasks" value="LLLYMDDD, LLYMDDD" autocapitalize="characters">
  <p class="hint">L = letter, D = digit, X = letter or digit, M = month letter (A–L), Y = year digit. AAP6G170 = LLLYMDDD. Separate several formats with commas.</p>
@@ -134,7 +141,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Prototype v0.6.1 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
+<footer>Prototype v0.7 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -351,6 +358,22 @@ function fuse(reads,ctx,now){
  if(res.months)res.months.conf=conf(res.months,1,0,0);
  return res;
 }
+// ---- Barcode helpers (pure) ----
+// Check digit for EAN-13 / EAN-8 / UPC-A.
+function eanOk(s){
+ if(!/^\d+$/.test(s)||![8,12,13].includes(s.length))return false;
+ const d=s.split('').map(Number),chk=d.pop();let sum=0;
+ d.reverse().forEach((x,i)=>{sum+=x*(i%2===0?3:1)});
+ return (10-sum%10)%10===chk;
+}
+// Choose one code from everything seen in the frame: numeric retail codes must pass their check digit,
+// and when several codes are visible the largest one (the one the person is pointing at) wins.
+function pickCode(codes){
+ const ok=(codes||[]).filter(c=>c&&c.text&&(!/^(EAN-13|EAN-8|UPC-A)$/.test(c.format)||eanOk(c.text)));
+ if(!ok.length)return null;
+ ok.sort((a,b)=>(b.size||0)-(a.size||0));
+ return{text:ok[0].text,format:ok[0].format,size:ok[0].size||0};
+}
 /* ==== PURE:END ==== */
 
  const $=id=>document.getElementById(id);
@@ -368,6 +391,14 @@ function fuse(reads,ctx,now){
  let worker=null,stream=null,state='idle',current=null,sessionSaved=0;
  let cvReady=false,cvFail=false,cvPromise=null,paddle=null,paddleErr='';
  let flags={},verified={};
+ // Barcode (SKU). Native BarcodeDetector is used when Chrome offers it; zxing-wasm (self-hosted in zxing/) is the fallback.
+ const BC={enabled:true,lib:'zxing/zxing-reader.js',wasm:'zxing/zxing_reader.wasm',
+  formats:['EAN-13','EAN-8','UPC-A','UPC-E','Code128','QRCode','DataMatrix'],liveMs:450,maxAgeMs:2500,maxW:1600};
+ const SKU_FIRST=true;   // true = step 1 scan the barcode (automatic, no click), step 2 Capture unlocks for the batch block
+ let skipSku=false;
+ const NATIVE_FMT={'EAN-13':'ean_13','EAN-8':'ean_8','UPC-A':'upc_a','UPC-E':'upc_e','Code128':'code_128','QRCode':'qr_code','DataMatrix':'data_matrix'};
+ const NATIVE_BACK=Object.fromEntries(Object.entries(NATIVE_FMT).map(([k,v])=>[v,k]));
+ let bcPromise=null,bcZX=null,bcNative=null,bcErr='',live={sku:'',fmt:'',t:0,tpl:''},liveTimer=null,skuInfo={code:'',fmt:'',src:''};
 
  const getRecords=()=>{try{return JSON.parse(localStorage.getItem(DB_KEY)||'[]')}catch{return []}};
  const setRecords=r=>{try{localStorage.setItem(DB_KEY,JSON.stringify(r));return true}catch(e){return false}};
@@ -379,13 +410,18 @@ function fuse(reads,ctx,now){
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
  /* ---------- UI state ---------- */
+ // Capture stays locked until a barcode has been read (or the person taps "No barcode – skip").
+ // If the barcode reader failed to load, nothing is gated.
+ function gated(){return state==='live'&&SKU_FIRST&&BC.enabled&&!!(bcZX||bcNative)&&!live.sku&&!skipSku}
+ function updateGate(){if(state==='live'){$('captureBtn').disabled=gated();$('skipBtn').classList.toggle('hidden',!gated())}}
  function setState(s){
   state=s;
   const idle=s==='idle',live=s==='live',cap=s==='captured';
   $('camwrap').classList.toggle('hidden',!live);
   $('previewBox').classList.toggle('hidden',!cap);
   $('startBtn').disabled=!idle;
-  $('captureBtn').disabled=!live;
+  $('captureBtn').disabled=!live||gated();
+  $('skipBtn').classList.toggle('hidden',!(live&&gated()));
   $('cancelBtn').disabled=!live;
   $('retakeBtn').disabled=!cap;
   $('saveBtn').disabled=!(cap&&current);
@@ -400,18 +436,21 @@ function fuse(reads,ctx,now){
   flags={};verified={};$('notes').textContent='';
  }
  function resetCapture(){
-  current=null;
+  current=null;skuInfo={code:'',fmt:'',src:''};
   FIELDS.forEach(id=>$(id).value='');
+  $('cb_sku').className='cb';$('cb_sku').textContent='';$('skuNote').textContent='';$('sku').classList.remove('f-chk','f-bad');
   $('preview').removeAttribute('src');
   $('ocrConf').textContent='';
   setWarn('');clearBadges();
  }
  function stopStream(){
+  if(liveTimer){clearTimeout(liveTimer);liveTimer=null}
   if(stream)stream.getTracks().forEach(t=>t.stop());
   stream=null;$('video').srcObject=null;
  }
  function updateEngineLine(){
   $('engineLine').textContent='Enhancer: '+(cvReady?'OpenCV ready':(cvFail?'basic (OpenCV did not load)':'OpenCV not loaded yet'))
+   +' · Barcode: '+(BC.enabled?((bcZX||bcNative)?'ready':(bcErr?'failed ('+bcErr+')':'loading…')):'off')
    +' · OCR: Tesseract'+(PADDLE_CFG.enabled?(paddle?' + Paddle':' (Paddle failed'+(paddleErr?': '+paddleErr:'')+')'):'');
  }
 
@@ -463,11 +502,11 @@ function fuse(reads,ctx,now){
  function loadTpl(name){
   const t=getTpls()[name];
   if(!t){
-   $('tplName').value='';$('tplMasks').value='LLLYMDDD, LLYMDDD';$('tplDate').value='auto';$('tplMonths').value='';
+   $('tplName').value='';$('tplMasks').value='LLLYMDDD, LLYMDDD';$('tplDate').value='auto';$('tplMonths').value='';$('tplSku').value='';
    setGuideSliders(DEF_GUIDE);
   }else{
    $('tplName').value=name;$('tplMasks').value=t.masks||'LLLYMDDD, LLYMDDD';$('tplDate').value=t.dateFmt||'auto';
-   $('tplMonths').value=t.months||'';setGuideSliders(t.guide||DEF_GUIDE);
+   $('tplMonths').value=t.months||'';$('tplSku').value=t.sku||'';setGuideSliders(t.guide||DEF_GUIDE);
   }
   try{localStorage.setItem(TPL_ACTIVE,name||'')}catch(e){}
  }
@@ -477,10 +516,15 @@ function fuse(reads,ctx,now){
   const name=val('tplName');
   if(!name){setMessage('Enter a template name first.',true);return}
   const t=getTpls();
-  t[name]={masks:$('tplMasks').value.trim(),dateFmt:$('tplDate').value,months:+$('tplMonths').value||null,guide:readGuide()};
+  t[name]={sku:val('tplSku'),masks:$('tplMasks').value.trim(),dateFmt:$('tplDate').value,months:+$('tplMonths').value||null,guide:readGuide()};
   if(!setTpls(t)){setMessage('Could not save template (storage full).',true);return}
   refreshTplSelect(name);try{localStorage.setItem(TPL_ACTIVE,name)}catch(e){}
   setMessage('Template "'+name+'" saved.');
+ };
+ $('tplSkuFill').onclick=()=>{
+  const v=val('sku');
+  if(!v){setMessage('Capture a label first, then tap this to copy its SKU.',true);return}
+  $('tplSku').value=v;setMessage('SKU copied. Enter a template name and tap Save template.');
  };
  $('tplDel').onclick=()=>{
   const name=$('tplSel').value;
@@ -787,19 +831,126 @@ function fuse(reads,ctx,now){
   $('cameraStatus').textContent='Review the fields, then Save or Retake.';
  }
 
+ /* ---------- Barcode / SKU ---------- */
+ function ptsSize(p){
+  const a=Array.isArray(p)?p:Object.values(p||{});let m=0;
+  for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++)m=Math.max(m,Math.hypot((a[i].x||0)-(a[j].x||0),(a[i].y||0)-(a[j].y||0)));
+  return m;
+ }
+ function initBarcode(){
+  if(!BC.enabled)return Promise.resolve(false);
+  if(bcPromise)return bcPromise;
+  bcPromise=(async()=>{
+   try{
+    if('BarcodeDetector' in window){
+     try{
+      const sup=await BarcodeDetector.getSupportedFormats(),f=BC.formats.map(x=>NATIVE_FMT[x]).filter(x=>sup.includes(x));
+      if(f.includes('ean_13'))bcNative=new BarcodeDetector({formats:f});
+     }catch(e){}
+    }
+    await loadScript(BC.lib,30000);
+    if(!window.ZXingWASM)throw new Error('library missing');
+    window.ZXingWASM.setZXingModuleOverrides({locateFile:(p,pre)=>/\.wasm$/.test(p)?new URL(BC.wasm,location.href).href:pre+p});
+    await window.ZXingWASM.readBarcodes(new ImageData(8,8),{formats:BC.formats,maxNumberOfSymbols:1});   // warm-up: compiles the wasm once
+    bcZX=window.ZXingWASM;
+   }catch(e){bcErr=String(e.message||e).slice(0,50)}
+   updateEngineLine();showChip();updateGate();
+   return !!(bcZX||bcNative);
+  })();
+  return bcPromise;
+ }
+ async function detectCodes(canvas){
+  const out=[];
+  if(bcNative){try{(await bcNative.detect(canvas)).forEach(c=>out.push({text:c.rawValue,format:NATIVE_BACK[c.format]||c.format,size:ptsSize(c.cornerPoints)}))}catch(e){}}
+  if(!out.length&&bcZX){
+   try{
+    const id=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,canvas.width,canvas.height);
+    // Two passes: the default adaptive threshold, then a fixed threshold. Thick, high-contrast
+    // inkjet-style bars (like these tubes) are often only read by the second pass.
+    for(const bin of ['LocalAverage','FixedThreshold']){
+     const r=await bcZX.readBarcodes(id,{formats:BC.formats,binarizer:bin,tryHarder:true,tryRotate:true,tryInvert:false,tryDownscale:true,maxNumberOfSymbols:3});
+     r.forEach(c=>{if(c.isValid!==false&&c.text)out.push({text:c.text,format:c.format,size:ptsSize(c.position)})});
+     if(out.length)break;
+    }
+   }catch(e){}
+  }
+  return out;
+ }
+ function frameCanvas(maxW){
+  const v=$('video'),vw=v.videoWidth,vh=v.videoHeight;
+  if(!vw||!vh)return null;
+  const k=Math.min(1,maxW/vw),c=$('bcCanvas');
+  c.width=Math.round(vw*k);c.height=Math.round(vh*k);
+  c.getContext('2d',{willReadFrequently:true}).drawImage(v,0,0,c.width,c.height);
+  return c;
+ }
+ // A saved template with this barcode selects itself (batch format, date format, scan rectangle).
+ function autoTemplate(code){
+  const t=getTpls();
+  const name=Object.keys(t).find(n=>t[n]&&t[n].sku&&String(t[n].sku).trim()===code);
+  if(name&&$('tplSel').value!==name){$('tplSel').value=name;loadTpl(name)}
+  return name||'';
+ }
+ function showChip(){
+  const el=$('skuChip');if(!el)return;
+  if(live.sku){el.className='ok';el.textContent='SKU '+live.sku+' ✓'+(live.tpl?'  ·  '+live.tpl:'')+(SKU_FIRST?'  –  now frame the batch block, tap Capture':'')}
+  else{
+   el.className='';
+   el.textContent=!BC.enabled?'Barcode reading is off':((bcZX||bcNative)?(SKU_FIRST?(skipSku?'Barcode skipped – type the SKU after capture':'Step 1: show the barcode to the camera'):'Barcode not seen yet – keep it in view'):(bcErr?'Barcode reader unavailable – type the SKU':'Barcode reader loading…'));
+  }
+ }
+ function scheduleLive(){if(state==='live'&&!liveTimer)liveTimer=setTimeout(liveTick,BC.liveMs)}
+ async function liveTick(){
+  liveTimer=null;
+  if(state!=='live')return;
+  try{
+   if((bcZX||bcNative)&&$('video').readyState>=2){
+    const c=frameCanvas(BC.maxW),hit=c?pickCode(await detectCodes(c)):null;
+    if(state!=='live')return;
+    if(hit){
+     const changed=hit.text!==live.sku;
+     live={sku:hit.text,fmt:hit.format,t:Date.now(),tpl:live.tpl};
+     if(changed)live.tpl=autoTemplate(hit.text);
+     showChip();updateGate();
+    }else if(!SKU_FIRST&&live.sku&&Date.now()-live.t>BC.maxAgeMs){live={sku:'',fmt:'',t:0,tpl:''};showChip()}
+   }
+  }catch(e){}
+  scheduleLive();
+ }
+ // Called once per capture: decode the captured full frame (not only the yellow crop); fall back to a
+ // barcode seen in the last moments of the live preview.
+ async function resolveSku(fullC){
+  skuInfo={code:'',fmt:'',src:''};
+  let hit=null;
+  if(fullC&&(bcZX||bcNative)){try{hit=pickCode(await detectCodes(fullC))}catch(e){}}
+  if(hit)skuInfo={code:hit.text,fmt:hit.format,src:'still'};
+  else if(live.sku&&(SKU_FIRST||Date.now()-live.t<=BC.maxAgeMs))skuInfo={code:live.sku,fmt:live.fmt,src:'live'};
+  $('sku').value=skuInfo.code;
+  const cb=$('cb_sku'),inp=$('sku');inp.classList.remove('f-chk','f-bad');
+  if(skuInfo.code){
+   cb.className='cb ok';cb.textContent='barcode';
+   const tn=autoTemplate(skuInfo.code);
+   $('skuNote').textContent='Read from the '+skuInfo.fmt+' barcode.'+(tn?' Template applied: '+tn+'.':'')+' Edit if it is wrong.';
+  }else{
+   cb.className='cb chk';cb.textContent='not read';inp.classList.add('f-chk');
+   $('skuNote').textContent='No barcode was read. Type the SKU, or Retake with the barcode fully in view.';
+  }
+ }
+
  /* ---------- Camera flow ---------- */
  async function startCamera(){
   setMessage('');
   try{
    $('cameraStatus').textContent='Starting camera…';
-   initCV();initPaddle();updateEngineLine();      // load in the background, reused afterwards
+   initCV();initPaddle();initBarcode();updateEngineLine();      // load in the background, reused afterwards
    await initOCR();
    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
    try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:'continuous'}]})}catch{}
    $('video').srcObject=stream;
    await $('video').play();
-   setState('live');
-   $('cameraStatus').textContent='Fit the Batch / Mfg / MRP block inside the yellow box, hold still, tap Capture.';
+   live={sku:'',fmt:'',t:0,tpl:''};skipSku=false;showChip();
+   setState('live');scheduleLive();
+   $('cameraStatus').textContent=SKU_FIRST?'Step 1: show the barcode (it locks by itself). Step 2: put the batch block in the yellow box and tap Capture.':'Batch / Mfg block inside the yellow box, barcode in view, hold still, tap Capture.';
   }catch(e){
    stopStream();setState('idle');
    $('cameraStatus').textContent='Cannot start camera: '+e.message;
@@ -811,11 +962,15 @@ function fuse(reads,ctx,now){
   if(state!=='live'||v.readyState<2)return;
   const c=cropGuide();
   $('preview').src=c.toDataURL('image/jpeg',0.92);
+  const full=frameCanvas(1920);
+  if(liveTimer){clearTimeout(liveTimer);liveTimer=null}
   stopStream();
   setState('captured');
   $('saveBtn').disabled=true;$('retakeBtn').disabled=true;
+  await resolveSku(full);
   await runOCR(c);
  };
+ $('skipBtn').onclick=()=>{skipSku=true;showChip();updateGate()};
  $('cancelBtn').onclick=()=>{stopStream();setState('idle');resetCapture();$('cameraStatus').textContent='Camera stopped. Nothing captured.'};
  $('retakeBtn').onclick=()=>{resetCapture();startCamera()};
 
@@ -831,7 +986,7 @@ function fuse(reads,ctx,now){
   const rec={
    scanId:crypto.randomUUID?crypto.randomUUID():String(now.getTime())+'-'+Math.random().toString(16).slice(2),
    scanDateTime:now.toISOString(),deviceId:'android-chrome',
-   sku:val('sku'),batch,mfg,bestBeforeMonths:months,expiry,
+   sku:val('sku'),skuScanned:{code:skuInfo.code,format:skuInfo.fmt,source:skuInfo.src},batch,mfg,bestBeforeMonths:months,expiry,
    ocrConfidence:Math.max(cf.batch,cf.mfg),
    ocrStatus:(batch&&mfg&&!unresolved.length)?'REVIEWED':'NEEDS_REVIEW',
    rawText:rawText.slice(0,1500),uploaded:false,
@@ -839,7 +994,7 @@ function fuse(reads,ctx,now){
    ocrOriginal:{batch:o.batch,mfg:o.mfg,exp:o.exp,months:o.months,engine:current?current.engine:'',attempts:current?current.attempts:0,ms:current?current.ms:0},
    confidence:cf,
    verified:{batch:!!verified.batch,mfg:!!verified.mfg,exp:!!verified.exp},
-   edited:{batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
+   edited:{sku:nz(val('sku'))!==nz(skuInfo.code),batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
   };
   r.push(rec);
   if(!setRecords(r)){r.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
@@ -879,9 +1034,9 @@ function fuse(reads,ctx,now){
  };
  $('exportBtn').onclick=()=>{
   const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded',
-   'template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
+   'skuCode','skuFormat','skuSource','editedSku','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
   const flat=r=>{const o=r.ocrOriginal||{},c=r.confidence||{},e=r.edited||{};
-   return{...r,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
+   const k=r.skuScanned||{};return{...r,skuCode:k.code,skuFormat:k.format,skuSource:k.source,editedSku:e.sku,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
     confBatch:c.batch,confMfg:c.mfg,confExp:c.exp,editedBatch:e.batch,editedMfg:e.mfg,editedExp:e.exp,engine:o.engine,attempts:o.attempts,ms:o.ms}};
   const rows=getRecords().map(flat);
   const csv=[cols.join(','),...rows.map(r=>cols.map(k=>'"'+String(r[k]==null?'':r[k]).replace(/"/g,'""')+'"').join(','))].join('\r\n');
