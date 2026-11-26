@@ -84,7 +84,7 @@ details.card summary{font-weight:700;cursor:pointer}
   <div><label for="batch">Batch / Lot No.<span class="cb" id="cb_batch"></span></label><input id="batch" placeholder="Batch number" autocapitalize="characters" disabled></div>
   <div><label for="mfg">MFG date<span class="cb" id="cb_mfg"></span></label><input id="mfg" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
   <div><label for="bbMonths">Best before (months)</label><input id="bbMonths" type="number" min="1" max="240" placeholder="e.g. 24" disabled></div>
-  <div><label for="expiry">Expiry date (if printed)<span class="cb" id="cb_exp"></span></label><input id="expiry" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
+  <div><label for="expiry">Expiry date (printed, or calculated)<span class="cb" id="cb_exp"></span></label><input id="expiry" placeholder="MM/YYYY or YYYY-MM-DD" disabled></div>
  </div>
  <div id="notes"></div>
  <label for="rawText">Recognized raw text (correct if needed)</label>
@@ -141,7 +141,7 @@ details.card summary{font-weight:700;cursor:pointer}
  <p class="hint">Sliders move the yellow box live. Settings apply to the next scan even before saving.</p>
 </details>
 
-<footer>Prototype v0.7 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
+<footer>Khasa Prototype v0.7.1 · OpenCV + PaddleOCR + Tesseract · multi-read validation · Verify every field before saving</footer>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -358,6 +358,25 @@ function fuse(reads,ctx,now){
  if(res.months)res.months.conf=conf(res.months,1,0,0);
  return res;
 }
+// ---- Expiry calculation (pure) ----
+// Same result as Excel  =EDATE(MFG, months) - 1  : add whole months (day clamps to the month's last day), then minus one day.
+// MM/YYYY and MM/YY count as the 1st of the month, so 08/2026 + 24 months = 31 Jul 2028.
+function parseMfgStr(s){
+ s=(s||'').trim();let m;
+ if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)))return{y:+m[1],m:+m[2],d:+m[3]};
+ if((m=s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/)))return{y:+m[3],m:+m[2],d:+m[1]};
+ if((m=s.match(/^(\d{1,2})[\/.\-](\d{4})$/)))return{y:+m[2],m:+m[1],d:1};
+ if((m=s.match(/^(\d{1,2})[\/.\-](\d{2})$/)))return{y:2000+(+m[2]),m:+m[1],d:1};
+ return null;
+}
+function calcExpiry(mfg,months){
+ const p=parseMfgStr(mfg),n=parseInt(months,10);
+ if(!p||!(n>0&&n<=240)||p.m<1||p.m>12||p.d<1||p.d>31||p.y<1990||p.y>2100)return null;
+ if(p.d>new Date(Date.UTC(p.y,p.m,0)).getUTCDate())return null;          // not a real calendar date
+ const tot=p.y*12+(p.m-1)+n,ey=Math.floor(tot/12),em=tot%12;
+ const dim=new Date(Date.UTC(ey,em+1,0)).getUTCDate(),ed=Math.min(p.d,dim);
+ return new Date(Date.UTC(ey,em,ed-1)).toISOString().slice(0,10);     // YYYY-MM-DD
+}
 // ---- Barcode helpers (pure) ----
 // Check digit for EAN-13 / EAN-8 / UPC-A.
 function eanOk(s){
@@ -395,7 +414,7 @@ function pickCode(codes){
  const BC={enabled:true,lib:'zxing/zxing-reader.js',wasm:'zxing/zxing_reader.wasm',
   formats:['EAN-13','EAN-8','UPC-A','UPC-E','Code128','QRCode','DataMatrix'],liveMs:450,maxAgeMs:2500,maxW:1600};
  const SKU_FIRST=true;   // true = step 1 scan the barcode (automatic, no click), step 2 Capture unlocks for the batch block
- let skipSku=false;
+ let skipSku=false,expiryAuto=false;   // expiryAuto: expiry field holds a calculated value (follows MFG / months edits)
  const NATIVE_FMT={'EAN-13':'ean_13','EAN-8':'ean_8','UPC-A':'upc_a','UPC-E':'upc_e','Code128':'code_128','QRCode':'qr_code','DataMatrix':'data_matrix'};
  const NATIVE_BACK=Object.fromEntries(Object.entries(NATIVE_FMT).map(([k,v])=>[v,k]));
  let bcPromise=null,bcZX=null,bcNative=null,bcErr='',live={sku:'',fmt:'',t:0,tpl:''},liveTimer=null,skuInfo={code:'',fmt:'',src:''};
@@ -436,7 +455,7 @@ function pickCode(codes){
   flags={};verified={};$('notes').textContent='';
  }
  function resetCapture(){
-  current=null;skuInfo={code:'',fmt:'',src:''};
+  current=null;skuInfo={code:'',fmt:'',src:''};expiryAuto=false;
   FIELDS.forEach(id=>$(id).value='');
   $('cb_sku').className='cb';$('cb_sku').textContent='';$('skuNote').textContent='';$('sku').classList.remove('f-chk','f-bad');
   $('preview').removeAttribute('src');
@@ -469,6 +488,17 @@ function pickCode(codes){
   el.textContent=res.conf+'%'+(b==='ok'?'':(b==='chk'?' · check':' · verify'));
   if(b!=='ok'){inp.classList.add(b==='chk'?'f-chk':'f-bad');flags[k]=b}
  }
+ // Expiry = EDATE(MFG, months) - 1. Only fills an empty/calculated field; a printed or typed expiry is never overwritten.
+ function recalcExpiry(){
+  if(state!=='captured')return;
+  if(!expiryAuto&&val('expiry'))return;
+  const x=calcExpiry(val('mfg'),val('bbMonths')),cb=$('cb_exp');
+  if(x){$('expiry').value=x;expiryAuto=true;cb.className='cb ok';cb.textContent='calculated';$('expiry').classList.remove('f-chk','f-bad');delete flags.exp}
+  else if(expiryAuto){$('expiry').value='';expiryAuto=false;cb.className='cb';cb.textContent=''}
+ }
+ $('mfg').addEventListener('input',recalcExpiry);
+ $('bbMonths').addEventListener('input',recalcExpiry);
+ $('expiry').addEventListener('input',()=>{expiryAuto=false});
  function markChecked(k){
   if(state!=='captured')return;
   verified[k]=true;
@@ -810,6 +840,7 @@ function pickCode(codes){
   $('batch').value=o.batch;$('mfg').value=o.mfg;$('expiry').value=o.exp;$('bbMonths').value=o.months;$('rawText').value=text;
   clearBadges();
   setBadge('batch',f.batch,false);setBadge('mfg',f.mfg,false);setBadge('exp',f.exp,true);
+  expiryAuto=false;recalcExpiry();
 
   if(f.batch){
    if(f.batch.fixes.length)notes.push('Batch: changed '+f.batch.fixes.map(x=>x.txt+' (position '+x.pos+')').join(', ')+' to fit the batch format. Confirm against the photo.');
@@ -819,9 +850,10 @@ function pickCode(codes){
   }else notes.push('Batch not found. Type it from the photo or Retake closer.');
   if(!f.mfg)notes.push('MFG date not found. Type it from the photo or Retake.');
   else if(f.mfg.alts.length)notes.push('Other MFG readings: '+f.mfg.alts.map(a=>a.value+' ('+a.n+')').join(', '));
-  if(f.mfg&&!f.exp&&o.months){
-   const tot=f.mfg.info.y*12+(f.mfg.info.m-1)+(+o.months),ey=Math.floor(tot/12),em=tot%12+1;
-   notes.push('No printed expiry. MFG + '+o.months+' months = '+String(em).padStart(2,'0')+'/'+ey+' (some labels print one month earlier, e.g. 08/26 → 07/28). Not filled in automatically.');
+  if(expiryAuto)notes.push('Expiry calculated: MFG + '+val('bbMonths')+' months − 1 day (like Excel EDATE(MFG,months)−1). It updates if you change MFG or months.');
+  else if(f.exp&&o.months){
+   const c=calcExpiry(o.mfg,o.months),pe=parseMfgStr(o.exp);
+   if(c&&pe&&(+c.slice(0,4)!==pe.y||+c.slice(5,7)!==pe.m))notes.push('Printed expiry '+o.exp+' differs from MFG + '+o.months+' months − 1 day = '+c+'. Check the photo.');
   }
   $('notes').textContent=notes.join('\n');
   const flagged=Object.keys(flags).length;
@@ -994,7 +1026,8 @@ function pickCode(codes){
    ocrOriginal:{batch:o.batch,mfg:o.mfg,exp:o.exp,months:o.months,engine:current?current.engine:'',attempts:current?current.attempts:0,ms:current?current.ms:0},
    confidence:cf,
    verified:{batch:!!verified.batch,mfg:!!verified.mfg,exp:!!verified.exp},
-   edited:{sku:nz(val('sku'))!==nz(skuInfo.code),batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
+   expiryCalculated:expiryAuto,
+   edited:{sku:nz(val('sku'))!==nz(skuInfo.code),batch:nz(batch)!==nz(o.batch),mfg:nz(mfg)!==nz(o.mfg),exp:expiryAuto?false:nz(expiry)!==nz(o.exp),months:nz(months)!==nz(o.months)}
   };
   r.push(rec);
   if(!setRecords(r)){r.pop();setMessage('Phone storage is full. Sync or Export CSV now, then try again.',true);return}
@@ -1034,7 +1067,7 @@ function pickCode(codes){
  };
  $('exportBtn').onclick=()=>{
   const cols=['scanId','scanDateTime','deviceId','sku','batch','mfg','bestBeforeMonths','expiry','ocrConfidence','ocrStatus','rawText','uploaded',
-   'skuCode','skuFormat','skuSource','editedSku','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
+   'skuCode','skuFormat','skuSource','editedSku','expiryCalculated','template','ocrBatch','ocrMfg','ocrExp','ocrMonths','confBatch','confMfg','confExp','editedBatch','editedMfg','editedExp','engine','attempts','ms'];
   const flat=r=>{const o=r.ocrOriginal||{},c=r.confidence||{},e=r.edited||{};
    const k=r.skuScanned||{};return{...r,skuCode:k.code,skuFormat:k.format,skuSource:k.source,editedSku:e.sku,template:r.template||'',ocrBatch:o.batch,ocrMfg:o.mfg,ocrExp:o.exp,ocrMonths:o.months,
     confBatch:c.batch,confMfg:c.mfg,confExp:c.exp,editedBatch:e.batch,editedMfg:e.mfg,editedExp:e.exp,engine:o.engine,attempts:o.attempts,ms:o.ms}};
